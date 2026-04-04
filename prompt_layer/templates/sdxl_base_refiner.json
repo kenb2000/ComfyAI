@@ -1,0 +1,26 @@
+{
+  "nodes": [
+    {"id": 1, "class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl_base.safetensors"}},
+    {"id": 2, "class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl_refiner.safetensors"}},
+    {"id": 3, "class_type": "CLIPTextEncode", "inputs": {"text": "A high-quality photo", "clip": [1, "CLIP"]}},
+    {"id": 4, "class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": [1, "CLIP"]}},
+    {"id": 5, "class_type": "EmptyLatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+    {"id": 6, "class_type": "KSamplerAdvanced", "inputs": {"model": [1, "MODEL"], "add_noise": "enable", "noise_seed": 0, "steps": 30, "cfg": 7.5, "sampler_name": "euler", "scheduler": "normal", "positive": [3, "CONDITIONING"], "negative": [4, "CONDITIONING"], "latent_image": [5, "LATENT"], "start_at_step": 0, "end_at_step": 20, "return_with_leftover_noise": "disable"}},
+    {"id": 7, "class_type": "KSamplerAdvanced", "inputs": {"model": [2, "MODEL"], "add_noise": "disable", "noise_seed": 0, "steps": 30, "cfg": 7.0, "sampler_name": "euler", "scheduler": "normal", "positive": [3, "CONDITIONING"], "negative": [4, "CONDITIONING"], "latent_image": [6, "LATENT"], "start_at_step": 20, "end_at_step": 10000, "return_with_leftover_noise": "disable"}},
+    {"id": 8, "class_type": "VAEDecode", "inputs": {"samples": [7, "LATENT"], "vae": [1, "VAE"]}},
+    {"id": 9, "class_type": "SaveImage", "inputs": {"images": [8, "IMAGE"], "filename_prefix": "ComfyUI"}}
+  ],
+  "edges": [
+    [1, "CLIP", 3, "clip"],
+    [1, "CLIP", 4, "clip"],
+    [5, "LATENT", 6, "latent_image"],
+    [3, "CONDITIONING", 6, "positive"],
+    [4, "CONDITIONING", 6, "negative"],
+    [6, "LATENT", 7, "latent_image"],
+    [3, "CONDITIONING", 7, "positive"],
+    [4, "CONDITIONING", 7, "negative"],
+    [7, "LATENT", 8, "samples"],
+    [1, "VAE", 8, "vae"]
+  ],
+  "metadata": {"name": "SDXL Base + Refiner (valid template)"}
+}

@@ -1,0 +1,8 @@
+# Minimal requirements
+# Core parser uses only the Python standard library and does not require dependencies.
+
+# Optional: local LLM assistance via Ollama
+# Install only if you plan to use prompt_layer.ai_assistant
+# ollama>=0.3
+
+# Testing uses stdlib unittest so no pytest needed.

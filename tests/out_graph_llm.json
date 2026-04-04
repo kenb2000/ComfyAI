@@ -1,0 +1,247 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "sdxl_base.safetensors"
+      }
+    },
+    {
+      "id": 2,
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "A detailed scene",
+        "clip": [
+          1,
+          "CLIP"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "",
+        "clip": [
+          1,
+          "CLIP"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "CONTROL_IMAGE_PATH"
+      }
+    },
+    {
+      "id": 5,
+      "class_type": "ControlNetLoader",
+      "inputs": {
+        "control_net_name": "controlnet_depth.safetensors"
+      }
+    },
+    {
+      "id": 6,
+      "class_type": "ControlNetApplyAdvanced",
+      "inputs": {
+        "positive": [
+          2,
+          "CONDITIONING"
+        ],
+        "negative": [
+          3,
+          "CONDITIONING"
+        ],
+        "control_net": [
+          5,
+          "CONTROL_NET"
+        ],
+        "image": [
+          4,
+          "IMAGE"
+        ],
+        "strength": 1.0,
+        "start_percent": 0.0,
+        "end_percent": 1.0,
+        "vae": [
+          1,
+          "VAE"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    {
+      "id": 8,
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          1,
+          "MODEL"
+        ],
+        "seed": 0,
+        "steps": 25,
+        "cfg": 7.0,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "positive": [
+          6,
+          "positive"
+        ],
+        "negative": [
+          6,
+          "negative"
+        ],
+        "latent_image": [
+          7,
+          "LATENT"
+        ],
+        "denoise": 1.0
+      }
+    },
+    {
+      "id": 9,
+      "class_type": "LatentUpscaleBy",
+      "inputs": {
+        "samples": [
+          8,
+          "LATENT"
+        ],
+        "upscale_method": "bicubic",
+        "scale_by": 2.0
+      }
+    },
+    {
+      "id": 10,
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          9,
+          "LATENT"
+        ],
+        "vae": [
+          1,
+          "VAE"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": [
+          10,
+          "IMAGE"
+        ],
+        "filename_prefix": "ComfyUI"
+      }
+    }
+  ],
+  "edges": [
+    [
+      1,
+      "CLIP",
+      2,
+      "clip"
+    ],
+    [
+      1,
+      "CLIP",
+      3,
+      "clip"
+    ],
+    [
+      5,
+      "CONTROL_NET",
+      6,
+      "control_net"
+    ],
+    [
+      4,
+      "IMAGE",
+      6,
+      "image"
+    ],
+    [
+      2,
+      "CONDITIONING",
+      6,
+      "positive"
+    ],
+    [
+      3,
+      "CONDITIONING",
+      6,
+      "negative"
+    ],
+    [
+      1,
+      "VAE",
+      6,
+      "vae"
+    ],
+    [
+      1,
+      "MODEL",
+      8,
+      "model"
+    ],
+    [
+      6,
+      "positive",
+      8,
+      "positive"
+    ],
+    [
+      6,
+      "negative",
+      8,
+      "negative"
+    ],
+    [
+      7,
+      "LATENT",
+      8,
+      "latent_image"
+    ],
+    [
+      8,
+      "LATENT",
+      9,
+      "samples"
+    ],
+    [
+      9,
+      "LATENT",
+      10,
+      "samples"
+    ],
+    [
+      1,
+      "VAE",
+      10,
+      "vae"
+    ],
+    [
+      10,
+      "IMAGE",
+      11,
+      "images"
+    ]
+  ],
+  "metadata": {
+    "name": "SDXL + ControlNet Depth + Latent Upscale (valid template)",
+    "source": "prompt-layer",
+    "prompt": "Generate an SDXL image with ControlNet depth and upscale it"
+  }
+}

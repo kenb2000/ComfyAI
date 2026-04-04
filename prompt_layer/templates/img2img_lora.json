@@ -1,0 +1,29 @@
+{
+  "nodes": [
+    {"id": 1, "class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base_model.safetensors"}},
+    {"id": 2, "class_type": "LoraLoader", "inputs": {"model": [1, "MODEL"], "clip": [1, "CLIP"], "lora_name": "example_lora.safetensors", "strength_model": 0.8, "strength_clip": 0.8}},
+    {"id": 3, "class_type": "LoadImage", "inputs": {"image": "INPUT_IMAGE_PATH"}},
+    {"id": 4, "class_type": "VAEEncode", "inputs": {"pixels": [3, "IMAGE"], "vae": [1, "VAE"]}},
+    {"id": 5, "class_type": "CLIPTextEncode", "inputs": {"text": "A stylized rendition", "clip": [2, "CLIP"]}},
+    {"id": 6, "class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": [2, "CLIP"]}},
+    {"id": 7, "class_type": "KSampler", "inputs": {"model": [2, "MODEL"], "seed": 0, "steps": 20, "cfg": 6.5, "sampler_name": "euler", "scheduler": "normal", "positive": [5, "CONDITIONING"], "negative": [6, "CONDITIONING"], "latent_image": [4, "LATENT"], "denoise": 0.6}},
+    {"id": 8, "class_type": "VAEDecode", "inputs": {"samples": [7, "LATENT"], "vae": [1, "VAE"]}},
+    {"id": 9, "class_type": "SaveImage", "inputs": {"images": [8, "IMAGE"], "filename_prefix": "ComfyUI"}}
+  ],
+  "edges": [
+    [1, "MODEL", 2, "model"],
+    [1, "CLIP", 2, "clip"],
+    [3, "IMAGE", 4, "pixels"],
+    [1, "VAE", 4, "vae"],
+    [2, "CLIP", 5, "clip"],
+    [2, "CLIP", 6, "clip"],
+    [2, "MODEL", 7, "model"],
+    [5, "CONDITIONING", 7, "positive"],
+    [6, "CONDITIONING", 7, "negative"],
+    [4, "LATENT", 7, "latent_image"],
+    [7, "LATENT", 8, "samples"],
+    [1, "VAE", 8, "vae"],
+    [8, "IMAGE", 9, "images"]
+  ],
+  "metadata": {"name": "Img2Img with LoRA (valid template)"}
+}
