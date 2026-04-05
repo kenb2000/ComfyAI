@@ -20,6 +20,13 @@ import time
 from pathlib import Path
 from urllib import request
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from prompt_layer.ports import default_app_id, resolve_registered_port
+from prompt_layer.setup_config import load_settings
+
 
 def post_json(url: str, payload: dict) -> dict:
     data = json.dumps(payload).encode("utf-8")
@@ -41,11 +48,29 @@ def to_prompt_if_needed(data: dict) -> dict:
     return data
 
 
+def _default_comfy_connection() -> tuple[str, int]:
+    try:
+        settings = load_settings(project_root=ROOT)
+    except Exception:
+        return "127.0.0.1", 8188
+
+    comfy = settings.get("comfyui", {})
+    host = str(comfy.get("bind_address", "127.0.0.1"))
+    preferred_port = int(comfy.get("port", 8188))
+    return host, resolve_registered_port(
+        app_id=default_app_id(ROOT),
+        service_name="comfyui",
+        preferred_port=preferred_port,
+        host=host,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    default_host, default_port = _default_comfy_connection()
     ap = argparse.ArgumentParser()
     ap.add_argument("graph", help="Path to graph JSON (internal or comfy prompt)")
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8188)
+    ap.add_argument("--host", default=default_host)
+    ap.add_argument("--port", type=int, default=default_port)
     ap.add_argument("--poll", action="store_true", help="Poll /history until status done")
     ap.add_argument("--timeout", type=int, default=120, help="Polling timeout seconds")
     args = ap.parse_args(argv)

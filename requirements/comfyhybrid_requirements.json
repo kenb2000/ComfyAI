@@ -1,0 +1,64 @@
+{
+  "manifest_version": 1,
+  "comfyui_runtime": {
+    "comfyui_repo_source": "https://github.com/comfyanonymous/ComfyUI.git",
+    "local_repo_relative_path": "comfyui",
+    "python_version_constraints": ">=3.10,<3.13",
+    "comfyui_port": 8188,
+    "bind_address": "127.0.0.1",
+    "venv_path_policy": {
+      "mode": "tool_folder",
+      "inside_repo_relative_path": ".venv",
+      "tool_folder_relative_path": "tools/comfyhybrid-venv",
+      "allowed_modes": [
+        "inside_repo",
+        "tool_folder"
+      ]
+    }
+  },
+  "planner_service": {
+    "planner_base_url": "http://127.0.0.1:8000",
+    "health_endpoint": "/health",
+    "can_launch_planner_as_sidecar": true,
+    "assistant_repo_path": "",
+    "assistant_repo_path_env_var": "COMFYHYBRID_ASSISTANT_REPO"
+  },
+  "optional_comfy_models": [
+    {
+      "model_name": "sdxl_base.safetensors",
+      "type": "checkpoint",
+      "source": "local_path",
+      "source_value": "",
+      "expected_size_min_bytes": 1000000000,
+      "sha256": null,
+      "target_path_relative_to_models": "checkpoints/sdxl_base.safetensors"
+    },
+    {
+      "model_name": "sdxl_refiner.safetensors",
+      "type": "checkpoint",
+      "source": "local_path",
+      "source_value": "",
+      "expected_size_min_bytes": 1000000000,
+      "sha256": null,
+      "target_path_relative_to_models": "checkpoints/sdxl_refiner.safetensors"
+    },
+    {
+      "model_name": "controlnet_depth.safetensors",
+      "type": "controlnet",
+      "source": "local_path",
+      "source_value": "",
+      "expected_size_min_bytes": 100000000,
+      "sha256": null,
+      "target_path_relative_to_models": "controlnet/controlnet_depth.safetensors"
+    },
+    {
+      "model_name": "example_lora.safetensors",
+      "type": "lora",
+      "source": "local_path",
+      "source_value": "",
+      "expected_size_min_bytes": 1000000,
+      "sha256": null,
+      "target_path_relative_to_models": "loras/example_lora.safetensors"
+    }
+  ]
+}

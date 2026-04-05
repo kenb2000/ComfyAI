@@ -8,6 +8,13 @@ setup(
     packages=find_packages(include=["prompt_layer", "prompt_layer.*"]),
     include_package_data=True,
     install_requires=[],  # keep core stdlib-only
+    entry_points={
+        "console_scripts": [
+            "comfyhybrid-setup-status=prompt_layer.setup_status_server:main",
+            "comfyhybrid-setup-server=prompt_layer.setup_status_server:main",
+            "comfyhybrid-ports=prompt_layer.setup_status_server:ports_main",
+        ]
+    },
     extras_require={
         "llm": [
             "ollama>=0.3",
