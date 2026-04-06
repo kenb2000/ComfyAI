@@ -67,6 +67,7 @@ python -m unittest -q
 - Validate graph JSON: Tasks: Run Task → "Validate Graph JSON"
 - Validate graph JSON (LLM): Tasks: Run Task → "Validate Graph JSON (LLM)"
 - Launch ComfyUI server: Tasks: Run Task → "Launch ComfyUI"
+- Launch ComfyUI desktop shell: Tasks: Run Task → "Launch ComfyUI (Tauri Shell)"
  - Generate + Open (heuristic): Tasks: Run Task → "Generate + Open (Prompt Layer)"
  - Generate + Run (heuristic): Tasks: Run Task → "Generate + Run (Prompt Layer)"
  - Generate + Open (LLM): Tasks: Run Task → "Generate + Open (Prompt Layer - LLM)"
@@ -79,6 +80,23 @@ python .\scripts\launch_comfyui.py
 ```
 
 The launcher prefers the repo venv, enables `ComfyUI-Manager` by default, and uses GPU unless you set `HYBRID_COMFYUI_USE_CPU=1`.
+
+## Launch ComfyUI In A Tauri Shell
+
+The desktop shell lives under `desktop/tauri` and wraps the local ComfyUI server in a native Tauri window.
+
+```powershell
+cd .\desktop\tauri
+cargo tauri dev
+```
+
+What it does:
+- opens a lightweight native shell window first
+- starts the configured local `comfyui/main.py` runtime with the repo `.venv`
+- waits for the configured ComfyUI health endpoint to respond
+- navigates the Tauri webview to the local ComfyUI URL once it is ready
+
+The shell writes backend startup logs to `tools/runtime/tauri-comfyui-stdout.log` and `tools/runtime/tauri-comfyui-stderr.log`.
 
 ## Setup Status Endpoint
 

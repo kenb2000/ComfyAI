@@ -20,6 +20,8 @@ Thumbs.db
 
 # Editor
 .vscode/
+desktop/tauri/node_modules/
+desktop/tauri/src-tauri/target/
 
 # ComfyUI repository content (keep placeholder README)
 comfyui/*

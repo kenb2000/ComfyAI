@@ -30,6 +30,19 @@ from prompt_layer.setup_config import (
 )
 
 
+def resolve_frontend_root(python_exe: Path) -> Path | None:
+    venv_root = python_exe.parent.parent
+    candidates = [
+        venv_root / "Lib" / "site-packages" / "comfyui_frontend_package" / "static",
+        venv_root / "Lib" / "site-packages" / "ComfyUI_frontend_package" / "static",
+        venv_root / "lib" / "site-packages" / "comfyui_frontend_package" / "static",
+        venv_root / "lib" / "site-packages" / "ComfyUI_frontend_package" / "static",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
 
 def main() -> int:
     root = ROOT
@@ -45,6 +58,7 @@ def main() -> int:
         return 2
 
     env = os.environ.copy()
+    env.setdefault("MASTER_PORTS_PATH", str((root / "tools" / "runtime" / "MasterPorts.json").resolve()))
     forwarded_args = sys.argv[1:]
     args = [str(python_exe), str(main_py)]
 
@@ -78,6 +92,10 @@ def main() -> int:
         args.extend(["--listen", listen])
     if port and "--port" not in forwarded_args:
         args.extend(["--port", str(port)])
+    if "--front-end-root" not in forwarded_args and "--front-end-root" not in default_launch_args:
+        frontend_root = resolve_frontend_root(python_exe)
+        if frontend_root is not None:
+            args.extend(["--front-end-root", str(frontend_root)])
 
     args.extend(forwarded_args)
 
@@ -85,7 +103,14 @@ def main() -> int:
     print(f"Service comfyui bound to {listen}:{port}", flush=True)
     print(f"Launching ComfyUI with: {' '.join(args)} (cwd={comfy_dir})", flush=True)
     try:
-        process = subprocess.Popen(args, cwd=str(comfy_dir), env=env)
+        popen_kwargs: dict[str, object] = {
+            "cwd": str(comfy_dir),
+            "env": env,
+            "stdin": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        process = subprocess.Popen(args, **popen_kwargs)
         record_reservation(
             app_id=default_app_id(root),
             service_name="comfyui",

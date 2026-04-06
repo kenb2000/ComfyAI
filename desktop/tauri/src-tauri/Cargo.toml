@@ -1,0 +1,24 @@
+[package]
+name = "comfyai-tauri-shell"
+version = "0.1.0"
+edition = "2021"
+description = "Tauri shell for the local ComfyAI ComfyUI runtime"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.0", features = [] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = true
