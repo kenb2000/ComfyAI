@@ -434,8 +434,17 @@ def acquire_comfyui_repo(settings: dict[str, Any], project_root: Path, emit: Pro
     comfy_root = resolve_comfy_repo_path(settings, project_root)
     source = str(settings.get("comfyui", {}).get("repo_source", "")).strip()
     main_py = comfy_root / "main.py"
+    relative_path = str(comfy_root.relative_to(project_root)).replace("\\", "/") if comfy_root.is_relative_to(project_root) else str(comfy_root)
+    is_submodule = _has_submodule(project_root, relative_path)
 
     emit(make_progress_event("step", step="acquire_comfyui", status="started", repo_path=str(comfy_root.resolve()), repo_source=source))
+
+    if is_submodule:
+        result = run_command(["git", "-C", str(project_root), "submodule", "update", "--init", "--recursive", "--", relative_path])
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Failed to initialize ComfyUI submodule")
+        emit(make_progress_event("step", step="acquire_comfyui", status="completed", action="submodule_initialized"))
+        return comfy_root
 
     if main_py.exists() and _is_git_repo(comfy_root):
         result = run_command(["git", "-C", str(comfy_root), "pull", "--ff-only", "origin", "master"])
@@ -452,14 +461,6 @@ def acquire_comfyui_repo(settings: dict[str, Any], project_root: Path, emit: Pro
             )
         else:
             emit(make_progress_event("step", step="acquire_comfyui", status="completed", action="updated"))
-        return comfy_root
-
-    relative_path = str(comfy_root.relative_to(project_root)).replace("\\", "/") if comfy_root.is_relative_to(project_root) else str(comfy_root)
-    if not comfy_root.exists() and _has_submodule(project_root, relative_path):
-        result = run_command(["git", "-C", str(project_root), "submodule", "update", "--init", "--recursive", "--", relative_path])
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Failed to initialize ComfyUI submodule")
-        emit(make_progress_event("step", step="acquire_comfyui", status="completed", action="submodule_initialized"))
         return comfy_root
 
     if comfy_root.exists() and not main_py.exists():

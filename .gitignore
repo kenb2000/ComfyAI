@@ -22,7 +22,3 @@ Thumbs.db
 .vscode/
 desktop/tauri/node_modules/
 desktop/tauri/src-tauri/target/
-
-# ComfyUI repository content (keep placeholder README)
-comfyui/*
-!comfyui/README.md

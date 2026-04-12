@@ -9,11 +9,11 @@ Add a prompt-to-graph layer on top of ComfyUI without losing the manual node edi
 
 ## Setup (Windows PowerShell)
 
-1) Clone ComfyUI into `comfyui/`:
+1) Initialize the pinned ComfyUI submodule:
 
 ```powershell
 cd .
- git clone https://github.com/comfyanonymous/ComfyUI.git .\comfyui
+git submodule update --init --recursive
 ```
 
 2) (Optional) Create a virtual environment:
