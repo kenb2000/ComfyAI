@@ -241,6 +241,15 @@ def resolve_python_executable(settings: dict[str, Any], project_root: Path | str
         return explicit_python
 
     venv_dir = resolve_tool_paths(settings, project_root_path)["venv_dir"]
+    candidates = [
+        venv_dir / "bin" / "python",
+        venv_dir / "Scripts" / "python.exe",
+        venv_dir / "Scripts" / "python",
+        venv_dir / "bin" / "python3",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     if os.name == "nt":
         return venv_dir / "Scripts" / "python.exe"
     return venv_dir / "bin" / "python"

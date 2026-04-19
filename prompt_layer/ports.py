@@ -384,14 +384,21 @@ def allocate_port(
 
         assigned = None
         reused_existing = False
+        previous_key = (app_id, service_name, protocol_name, host_name)
         occupied_ports = {
             int(entry.get("assigned_port", 0) or 0)
             for entry in active
-            if str(entry.get("protocol", "tcp")) == protocol_name and str(entry.get("host", "127.0.0.1")) == host_name
+            if str(entry.get("protocol", "tcp")) == protocol_name
+            and str(entry.get("host", "127.0.0.1")) == host_name
+            and _entry_key(entry) != previous_key
         }
         for candidate in candidates:
             if candidate in occupied_ports:
                 continue
+            if previous is not None and candidate == int(previous.get("assigned_port", 0) or 0):
+                assigned = candidate
+                reused_existing = True
+                break
             if is_port_free(host_name, candidate, protocol=protocol_name):
                 assigned = candidate
                 reused_existing = previous is not None and candidate == int(previous.get("assigned_port", 0) or 0)

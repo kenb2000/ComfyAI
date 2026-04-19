@@ -613,6 +613,31 @@ def _expand_tokens(value: str, mapping: dict[str, str]) -> str:
     return expanded
 
 
+def _validate_launch_command(command: list[str], cwd: Path) -> None:
+    if not command:
+        raise RuntimeError("Launch command is empty.")
+
+    executable = str(command[0]).strip()
+    if not executable:
+        raise RuntimeError("Launch command executable is empty.")
+
+    shell_wrappers = {"bash", "sh", "powershell.exe", "pwsh", "pwsh.exe"}
+    candidate_path: Path | None = None
+    if executable in shell_wrappers and len(command) >= 2:
+        candidate_path = Path(command[1])
+    else:
+        executable_path = Path(executable)
+        if executable_path.suffix.lower() in {".sh", ".ps1", ".bat", ".cmd"} or "/" in executable or "\\" in executable:
+            candidate_path = executable_path
+
+    if candidate_path is None or str(candidate_path) in {"-c", "/c"}:
+        return
+
+    resolved = candidate_path if candidate_path.is_absolute() else cwd / candidate_path
+    if not resolved.exists():
+        raise RuntimeError(f"Planner launch command references a missing file: {resolved}")
+
+
 def _spawn_detached(command: list[str], cwd: Path, env: dict[str, str], log_path: Path) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log_handle:
@@ -769,6 +794,7 @@ def build_planner_launch_spec(
     command = [_expand_tokens(str(part), mapping) for part in command_template]
     cwd_raw = str(launch_settings.get("cwd", "")).strip()
     cwd = resolve_path(project_root, _expand_tokens(cwd_raw, mapping)) if cwd_raw else assistant_repo_path
+    _validate_launch_command(command, cwd)
     env = os.environ.copy()
     for key, value in dict(launch_settings.get("environment", {})).items():
         env[key] = _expand_tokens(str(value), mapping)
@@ -837,27 +863,36 @@ def planner_service_status(
     planner_settings = settings.get("planner", {})
     assistant_repo_path, assistant_repo_source = resolve_assistant_repo_path(settings, project_root)
     assistant_repo_exists = bool(assistant_repo_path) and assistant_repo_path.exists()
-    health_url = planner_health_url(settings, project_root)
-    planner_probe_timeout = max(5.0, timeout)
-    probe = _probe_http(health_url, timeout=planner_probe_timeout)
-    planner_host, planner_port = split_base_url_host_port(
-        resolve_planner_base_url(settings, project_root),
-        default_port=8000,
-    )
-    port_status = describe_service_port(
-        planner_host,
-        planner_port,
-        probe_url=health_url,
-        probe=probe,
-        timeout=planner_probe_timeout,
-    )
-
     try:
-        launch_spec = build_planner_launch_spec(settings, project_root, port_status=port_status)
+        launch_spec = build_planner_launch_spec(settings, project_root)
         launch_error = None
     except Exception as exc:
         launch_spec = None
         launch_error = str(exc)
+
+    base_url = launch_spec["planner_url"] if launch_spec is not None else resolve_planner_base_url(settings, project_root)
+    health_url = launch_spec["health_url"] if launch_spec is not None else planner_health_url(settings, project_root)
+    planner_probe_timeout = max(5.0, timeout)
+    if launch_spec is not None:
+        probe = _probe_http(health_url, timeout=planner_probe_timeout)
+        port_status = describe_service_port(
+            launch_spec["host"],
+            int(launch_spec["port_allocation"]["assigned_port"]),
+            probe_url=health_url,
+            probe=probe,
+            timeout=planner_probe_timeout,
+        )
+        planner_host, planner_port = split_base_url_host_port(base_url, default_port=8000)
+    else:
+        probe = _probe_http(health_url, timeout=planner_probe_timeout)
+        planner_host, planner_port = split_base_url_host_port(base_url, default_port=8000)
+        port_status = describe_service_port(
+            planner_host,
+            planner_port,
+            probe_url=health_url,
+            probe=probe,
+            timeout=planner_probe_timeout,
+        )
 
     runtime_paths = resolve_tool_paths(settings, project_root)
     pid_path = resolve_path(project_root, planner_settings.get("pid_path")) or (runtime_paths["runtime_dir"] / "planner.pid")
@@ -868,7 +903,7 @@ def planner_service_status(
 
     return {
         "settings_path": str(settings_path.resolve()) if settings_path is not None else None,
-        "base_url": resolve_planner_base_url(settings, project_root),
+        "base_url": base_url,
         "health_endpoint": str(planner_settings.get("health_endpoint", "/health")),
         "health_url": health_url,
         "healthy": bool(probe.get("ok", False)),

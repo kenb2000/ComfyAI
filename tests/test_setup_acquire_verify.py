@@ -369,6 +369,50 @@ class TestSetupAcquireVerify(unittest.TestCase):
 
             assistant_repo = root / "assistant-repo"
             assistant_repo.mkdir(parents=True, exist_ok=True)
+            scripts_dir = assistant_repo / "scripts"
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            (scripts_dir / "fake_backend.py").write_text(
+                (
+                    "from __future__ import annotations\n"
+                    "import json, os\n"
+                    "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+                    "from urllib.parse import urlsplit\n"
+                    "base_url = os.environ.get('PLANNER_BASE_URL', 'http://127.0.0.1:8000')\n"
+                    "parsed = urlsplit(base_url)\n"
+                    "host = parsed.hostname or '127.0.0.1'\n"
+                    "port = parsed.port or 8000\n"
+                    "class H(BaseHTTPRequestHandler):\n"
+                    "    def do_GET(self):\n"
+                    "        body = json.dumps({'ok': True}).encode('utf-8') if self.path == '/health' else b'{}'\n"
+                    "        self.send_response(200 if self.path == '/health' else 404)\n"
+                    "        self.send_header('Content-Type', 'application/json')\n"
+                    "        self.send_header('Content-Length', str(len(body)))\n"
+                    "        self.end_headers()\n"
+                    "        self.wfile.write(body)\n"
+                    "    def log_message(self, format, *args):\n"
+                    "        return\n"
+                    "server = ThreadingHTTPServer((host, port), H)\n"
+                    "server.serve_forever()\n"
+                ),
+                encoding="utf-8",
+            )
+            (scripts_dir / "run_backend_windows.ps1").write_text(
+                (
+                    "$python = $env:PYTHON_EXECUTABLE\n"
+                    "if (-not $python) { $python = 'python' }\n"
+                    "& $python (Join-Path $PSScriptRoot 'fake_backend.py')\n"
+                ),
+                encoding="utf-8",
+            )
+            (scripts_dir / "run_backend_linux.sh").write_text(
+                (
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    "PYTHON_BIN=\"${PYTHON_EXECUTABLE:-python3}\"\n"
+                    "exec \"$PYTHON_BIN\" \"$PWD/scripts/fake_backend.py\"\n"
+                ),
+                encoding="utf-8",
+            )
 
             manifest_path = self._write_manifest(
                 root,
