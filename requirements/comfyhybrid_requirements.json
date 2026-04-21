@@ -23,6 +23,92 @@
     "assistant_repo_path": "",
     "assistant_repo_path_env_var": "COMFYHYBRID_ASSISTANT_REPO"
   },
+  "local_planner": {
+    "enabled": true,
+    "mode": "local",
+    "platform_target": "linux",
+    "display_name": "Falcon 10B 1.58",
+    "default_model_id": "tiiuae/Falcon3-10B-Instruct-1.58bit",
+    "role_mapping": {
+      "dispatcher_model": "tiiuae/Falcon3-10B-Instruct-1.58bit",
+      "planner_model": "tiiuae/Falcon3-10B-Instruct-1.58bit",
+      "critic_model": "tiiuae/Falcon3-10B-Instruct-1.58bit"
+    },
+    "max_repairs_before_fail": 2,
+    "request_timeout_seconds": 30,
+    "planner_output_dir": "tools/workspace/planner-output",
+    "planner_policy_path": "tools/runtime/planner_policy.json",
+    "planner_status_path": "tools/runtime/planner_status.json",
+    "model_path": "",
+    "expected_storage_dir": "tools/models/planner/Falcon3-10B-Instruct-1.58bit",
+    "shared_storage_candidates": [
+      "/home/ken/Documents/GitHub/BitNet/Falcon3-10B-Instruct-1.58bit",
+      "tools/models/planner/Falcon3-10B-Instruct-1.58bit"
+    ],
+    "model_path_env_vars": [
+      "COMFYAI_LOCAL_PLANNER_MODEL",
+      "COMFYHYBRID_LOCAL_PLANNER_MODEL"
+    ],
+    "stronger_model_id": "",
+    "escalation_enabled": false
+  },
+  "linux_workstation": {
+    "enabled": true,
+    "role": "stable_workstation_development_node",
+    "role_label": "stable workstation / development node",
+    "machine_label": "Linux stable local generation and fallback node",
+    "active_profile": "linux_stable_nvidia",
+    "ltx_nodes": {
+      "required": true,
+      "candidate_paths": [
+        "comfyui/custom_nodes/ComfyUI-LTXVideo",
+        "comfyui/custom_nodes/LTXVideo",
+        "comfyui/custom_nodes/ltxvideo"
+      ],
+      "source": {
+        "kind": "git_url",
+        "value": "https://github.com/Lightricks/ComfyUI-LTXVideo.git"
+      }
+    },
+    "preferred_checkpoints": [
+      {
+        "model_name": "ltx_23_fp8",
+        "type": "ltx_checkpoint",
+        "acquire_by_default": true,
+        "source": {
+          "kind": "http_url",
+          "value": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/diffusion_models/ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors"
+        },
+        "expected_size_min_bytes": 20000000000,
+        "sha256": null,
+        "target_path_relative_to_models": "diffusion_models/ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors"
+      },
+      {
+        "model_name": "ltx_23_distilled",
+        "type": "ltx_checkpoint",
+        "acquire_by_default": false,
+        "source": {
+          "kind": "http_url",
+          "value": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/diffusion_models/ltx-2.3-22b-distilled-1.1_transformer_only_bf16.safetensors"
+        },
+        "expected_size_min_bytes": 35000000000,
+        "sha256": null,
+        "target_path_relative_to_models": "diffusion_models/ltx-2.3-22b-distilled-1.1_transformer_only_bf16.safetensors"
+      },
+      {
+        "model_name": "ltx_23_dev",
+        "type": "ltx_checkpoint",
+        "acquire_by_default": false,
+        "source": {
+          "kind": "http_url",
+          "value": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/diffusion_models/ltx-2.3-22b-dev_transformer_only_bf16.safetensors"
+        },
+        "expected_size_min_bytes": 35000000000,
+        "sha256": null,
+        "target_path_relative_to_models": "diffusion_models/ltx-2.3-22b-dev_transformer_only_bf16.safetensors"
+      }
+    ]
+  },
   "optional_comfy_models": [
     {
       "model_name": "sdxl_base.safetensors",

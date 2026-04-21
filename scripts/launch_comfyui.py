@@ -59,6 +59,14 @@ def main() -> int:
 
     env = os.environ.copy()
     env.setdefault("MASTER_PORTS_PATH", str((root / "tools" / "runtime" / "MasterPorts.json").resolve()))
+    linux_settings = settings.get("linux_workstation", {})
+    env.setdefault("COMFYAI_MACHINE_ROLE", str(linux_settings.get("role", "stable_workstation_development_node")))
+    env.setdefault("COMFYAI_MACHINE_PROFILE", str(linux_settings.get("active_profile", "linux_stable_nvidia")))
+    env.setdefault("COMFYAI_LOW_WORKSTATION_IMPACT", "1")
+    env.setdefault("COMFYAI_ASYNC_OFFLOAD", "1")
+    env.setdefault("COMFYAI_PINNED_MEMORY", "1")
+    env.setdefault("COMFYAI_WEIGHT_STREAMING", "auto")
+    env.setdefault("COMFYAI_NVFP4_SUPPORTED", "0")
     forwarded_args = sys.argv[1:]
     args = [str(python_exe), str(main_py)]
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib import request
 
 from prompt_layer.setup_config import default_settings, deep_merge, save_settings
+from prompt_layer.setup_runtime import _select_linux_nvidia_torch_channel
 from prompt_layer.setup_status_server import make_setup_status_handler
 
 
@@ -20,6 +21,66 @@ class _JsonHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         body = json.dumps({"ok": True}).encode("utf-8")
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):  # noqa: A003
+        return
+
+
+class _PlannerCapableComfyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        if self.path in ("/system_stats", "/"):
+            body = json.dumps({"ok": True}).encode("utf-8")
+            self.send_response(200)
+        elif self.path == "/object_info":
+            body = json.dumps(
+                {
+                    "CheckpointLoaderSimple": {},
+                    "CLIPTextEncode": {},
+                    "EmptyLatentImage": {},
+                    "KSamplerAdvanced": {},
+                    "VAEDecode": {},
+                    "SaveImage": {},
+                    "LoadImage": {},
+                    "LoraLoader": {},
+                    "VAEEncode": {},
+                    "KSampler": {},
+                    "ControlNetLoader": {},
+                    "ControlNetApplyAdvanced": {},
+                    "LatentUpscaleBy": {},
+                    "AsyncOffload": {},
+                    "PinnedMemory": {},
+                    "WeightStreaming": {},
+                    "LTXVideoSampler": {},
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+        else:
+            body = b"{}"
+            self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):  # noqa: A003
+        return
+
+
+class _ComfyBenchmarkHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        if self.path == "/system_stats":
+            body = json.dumps({"ok": True}).encode("utf-8")
+            self.send_response(200)
+        elif self.path == "/object_info":
+            body = json.dumps({"LTXVideoSampler": {}, "AsyncOffload": {}, "PinnedMemory": {}, "WeightStreaming": {}}).encode("utf-8")
+            self.send_response(200)
+        else:
+            body = b"{}"
+            self.send_response(404)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -83,6 +144,20 @@ class TestSetupAcquireVerify(unittest.TestCase):
         manifest_path.write_text(json.dumps(content, indent=2), encoding="utf-8")
         return manifest_path
 
+    def _write_fake_planner_model(self, root: Path) -> Path:
+        model_dir = root / "shared-models" / "Falcon3-10B-Instruct-1.58bit"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
+        (model_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+        (model_dir / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+        (model_dir / "model.safetensors").write_bytes(b"12345678")
+        return model_dir
+
+    def test_select_linux_nvidia_torch_channel_prefers_driver_compatible_index(self):
+        self.assertEqual(_select_linux_nvidia_torch_channel("550.163.01")["channel"], "cu124")
+        self.assertEqual(_select_linux_nvidia_torch_channel("535.216.03")["channel"], "cu121")
+        self.assertEqual(_select_linux_nvidia_torch_channel("580.12.01")["channel"], "cu130")
+
     def _init_git_repo(self, repo_path: Path) -> None:
         subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True, text=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=repo_path, check=True, capture_output=True, text=True)
@@ -103,6 +178,7 @@ class TestSetupAcquireVerify(unittest.TestCase):
             local_model = root / "downloads" / "sdxl_base.safetensors"
             local_model.parent.mkdir(parents=True, exist_ok=True)
             local_model.write_bytes(b"12345678")
+            planner_model = self._write_fake_planner_model(root)
 
             manifest_path = self._write_manifest(
                 root,
@@ -121,6 +197,9 @@ class TestSetupAcquireVerify(unittest.TestCase):
                         "can_launch_planner_as_sidecar": False,
                         "assistant_repo_path": "",
                         "assistant_repo_path_env_var": "COMFYHYBRID_ASSISTANT_REPO",
+                    },
+                    "local_planner": {
+                        "shared_storage_candidates": [str(planner_model)],
                     },
                     "optional_comfy_models": [
                         {
@@ -159,17 +238,21 @@ class TestSetupAcquireVerify(unittest.TestCase):
                 lines = [json.loads(line) for line in response.read().decode("utf-8").splitlines() if line.strip()]
 
             self.assertTrue(any(line.get("event") == "complete" and line.get("ok") is True for line in lines))
+            self.assertTrue(any(line.get("step") == "acquire_linux_workstation_assets" for line in lines))
+            self.assertTrue(any(line.get("step") == "acquire_local_planner" for line in lines))
             self.assertTrue((root / "settings.json").exists())
             self.assertTrue((root / "runtime" / "comfyui" / "main.py").exists())
             self.assertTrue((root / "runtime" / "comfyui" / "models" / "checkpoints" / "sdxl_base.safetensors").exists())
 
             saved_settings = json.loads((root / "settings.json").read_text(encoding="utf-8"))
             self.assertEqual(saved_settings["comfyui"]["port"], 9191)
+            self.assertEqual(saved_settings["planner"]["model_path"], str(planner_model.resolve()))
 
     def test_setup_verify_endpoint_launches_configured_comfyui(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             comfy_port = self._reserve_free_port()
+            planner_model = self._write_fake_planner_model(root)
             manifest_path = self._write_manifest(
                 root,
                 {
@@ -187,6 +270,9 @@ class TestSetupAcquireVerify(unittest.TestCase):
                         "can_launch_planner_as_sidecar": False,
                         "assistant_repo_path": "",
                         "assistant_repo_path_env_var": "COMFYHYBRID_ASSISTANT_REPO",
+                    },
+                    "local_planner": {
+                        "shared_storage_candidates": [str(planner_model)],
                     },
                     "optional_comfy_models": [],
                 },
@@ -209,7 +295,7 @@ class TestSetupAcquireVerify(unittest.TestCase):
                     "            body = json.dumps({'ok': True}).encode('utf-8')\n"
                     "            self.send_response(200)\n"
                     "        elif self.path == '/object_info':\n"
-                    "            body = json.dumps({'nodes': {}}).encode('utf-8')\n"
+                    "            body = json.dumps({'CheckpointLoaderSimple': {}, 'CLIPTextEncode': {}, 'EmptyLatentImage': {}, 'KSamplerAdvanced': {}, 'VAEDecode': {}, 'SaveImage': {}}).encode('utf-8')\n"
                     "            self.send_response(200)\n"
                     "        else:\n"
                     "            body = b'{}'\n"
@@ -260,20 +346,18 @@ class TestSetupAcquireVerify(unittest.TestCase):
                 self.assertTrue(data["comfyui"]["launched_by_verify"])
                 self.assertTrue(data["comfyui"]["health_after"]["ok"])
                 self.assertTrue(data["comfyui"]["object_info"]["ok"])
+                self.assertTrue(data["planner"]["ready"])
+                self.assertTrue(data["planner"]["verify"]["ok"])
                 self.assertTrue(data["all_required_ok"])
             finally:
                 if launched_pid:
                     self._kill_pid(int(launched_pid))
 
-    def test_setup_verify_endpoint_launches_planner_sidecar_when_configured(self):
+    def test_setup_verify_endpoint_reports_missing_local_planner_model(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            comfy_server, comfy_thread = self._start_server(_JsonHandler)
+            comfy_server, comfy_thread = self._start_server(_PlannerCapableComfyHandler)
             self.addCleanup(self._stop_server, comfy_server, comfy_thread)
-
-            planner_port = self._reserve_free_port()
-            assistant_repo = root / "assistant-repo"
-            assistant_repo.mkdir(parents=True, exist_ok=True)
 
             manifest_path = self._write_manifest(
                 root,
@@ -288,31 +372,13 @@ class TestSetupAcquireVerify(unittest.TestCase):
                         "venv_path_policy": {"mode": "tool_folder"},
                     },
                     "planner_service": {
-                        "planner_base_url": f"http://127.0.0.1:{planner_port}",
-                        "can_launch_planner_as_sidecar": True,
-                        "assistant_repo_path": "assistant-repo",
+                        "planner_base_url": "http://127.0.0.1:8555",
+                        "can_launch_planner_as_sidecar": False,
+                        "assistant_repo_path": "",
                         "assistant_repo_path_env_var": "COMFYHYBRID_ASSISTANT_REPO",
                     },
                     "optional_comfy_models": [],
                 },
-            )
-
-            command_script = (
-                "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
-                "class H(BaseHTTPRequestHandler):\n"
-                "    def do_GET(self):\n"
-                "        body=b'{}'\n"
-                "        self.send_response(200)\n"
-                "        self.send_header('Content-Type','application/json')\n"
-                "        self.send_header('Content-Length', str(len(body)))\n"
-                "        self.end_headers()\n"
-                "        self.wfile.write(body)\n"
-                "    def log_message(self, format, *args):\n"
-                "        return\n"
-                f"server = ThreadingHTTPServer(('127.0.0.1', {planner_port}), H)\n"
-                "for _ in range(4):\n"
-                "    server.handle_request()\n"
-                "server.server_close()\n"
             )
 
             settings = deep_merge(
@@ -321,19 +387,14 @@ class TestSetupAcquireVerify(unittest.TestCase):
                     "comfyui": {
                         "bind_address": "127.0.0.1",
                         "port": comfy_server.server_port,
-                        "health_endpoint": "/",
-                        "object_info_endpoint": "/",
+                        "health_endpoint": "/system_stats",
+                        "object_info_endpoint": "/object_info",
                     },
                     "planner": {
-                        "assistant_repo_path": "assistant-repo",
-                        "can_launch_as_sidecar": True,
-                        "sidecar_launch": {
-                            "enabled": True,
-                            "cwd": "assistant-repo",
-                            "windows_command": [sys.executable, "-u", "-c", command_script],
-                            "linux_command": [sys.executable, "-u", "-c", command_script],
-                            "environment": {},
-                        },
+                        "shared_storage_candidates": ["missing-falcon-model"],
+                        "expected_storage_dir": "missing-falcon-model",
+                        "model_path_env_vars": [],
+                        "model_path": "",
                     },
                 },
             )
@@ -349,17 +410,12 @@ class TestSetupAcquireVerify(unittest.TestCase):
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            launched_pid = None
-            try:
-                with request.urlopen(req, timeout=40) as response:
-                    data = json.loads(response.read().decode("utf-8"))
-                launched_pid = ((data.get("planner") or {}).get("launch") or {}).get("pid")
+            with request.urlopen(req, timeout=40) as response:
+                data = json.loads(response.read().decode("utf-8"))
 
-                self.assertTrue(data["planner"]["launched_by_verify"])
-                self.assertTrue(data["planner"]["probe_after"]["reachable"])
-            finally:
-                if launched_pid:
-                    self._kill_pid(int(launched_pid))
+            self.assertFalse(data["planner"]["ready"])
+            self.assertEqual(data["planner"]["status"], "missing_model")
+            self.assertFalse(data["planner"]["verify"]["ok"])
 
     def test_planner_service_start_falls_forward_when_default_port_is_occupied(self):
         with tempfile.TemporaryDirectory() as td:
@@ -474,6 +530,70 @@ class TestSetupAcquireVerify(unittest.TestCase):
             finally:
                 if launched_pid:
                     self._kill_pid(int(launched_pid))
+
+    def test_setup_benchmark_endpoint_persists_linux_recommendation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            comfy_server, comfy_thread = self._start_server(_ComfyBenchmarkHandler)
+            self.addCleanup(self._stop_server, comfy_server, comfy_thread)
+
+            manifest_path = self._write_manifest(
+                root,
+                {
+                    "manifest_version": 1,
+                    "comfyui_runtime": {
+                        "comfyui_repo_source": "",
+                        "local_repo_relative_path": "comfyui",
+                        "python_version_constraints": ">=3.10,<3.13",
+                        "comfyui_port": comfy_server.server_port,
+                        "bind_address": "127.0.0.1",
+                        "venv_path_policy": {"mode": "tool_folder"},
+                    },
+                    "planner_service": {
+                        "planner_base_url": "http://127.0.0.1:8555",
+                        "can_launch_planner_as_sidecar": False,
+                        "assistant_repo_path": "",
+                        "assistant_repo_path_env_var": "COMFYHYBRID_ASSISTANT_REPO",
+                    },
+                    "optional_comfy_models": [],
+                },
+            )
+
+            (root / "comfyui").mkdir(parents=True, exist_ok=True)
+            (root / "comfyui" / "main.py").write_text("print('comfy')\n", encoding="utf-8")
+            (root / "comfyui" / "custom_nodes" / "ComfyUI-LTXVideo").mkdir(parents=True, exist_ok=True)
+            (root / "comfyui" / "models" / "checkpoints").mkdir(parents=True, exist_ok=True)
+            (root / "comfyui" / "models" / "checkpoints" / "ltx-2.3-fp8.safetensors").write_bytes(b"12345678")
+            settings = deep_merge(
+                default_settings(project_root=root, manifest_path=manifest_path),
+                {
+                    "comfyui": {
+                        "repo_path": "comfyui",
+                        "python_executable": sys.executable,
+                        "port": comfy_server.server_port,
+                        "bind_address": "127.0.0.1",
+                    }
+                },
+            )
+            save_settings(settings, root / "settings.json")
+
+            handler = make_setup_status_handler(project_root=root, manifest_path=manifest_path, settings_path=root / "settings.json")
+            server, thread = self._start_server(handler)
+            self.addCleanup(self._stop_server, server, thread)
+
+            req = request.Request(
+                f"http://127.0.0.1:{server.server_port}/setup/benchmark",
+                data=json.dumps({}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with request.urlopen(req, timeout=30) as response:
+                data = json.loads(response.read().decode("utf-8"))
+
+            self.assertIn("recommended_config", data)
+            self.assertTrue(data["recommended_config"])
+            self.assertIn("artifact_paths", data)
+            self.assertTrue(Path(data["artifact_paths"]["latest_path"]).exists())
 
 
 if __name__ == "__main__":

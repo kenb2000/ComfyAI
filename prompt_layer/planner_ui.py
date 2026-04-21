@@ -1,4 +1,4 @@
-"""Small browser UI for the shared planner/helper bridge."""
+"""Small browser UI for the Linux-first local planner."""
 from __future__ import annotations
 
 
@@ -8,24 +8,28 @@ def get_planner_ui_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ComfyUIhybrid Planner Bridge</title>
+  <title>ComfyAI Local Planner</title>
   <style>
     :root {
-      --bg: #f3efe4;
-      --panel: #fffaf0;
-      --border: #d4c4a8;
-      --text: #1f241f;
-      --accent: #6d4c2f;
-      --accent-soft: #f0ddbe;
-      --ok: #2a6b48;
-      --warn: #8b5e1a;
-      --fail: #8c2f39;
+      --bg: #f1ede6;
+      --panel: #fffaf4;
+      --border: #d1c4b1;
+      --text: #22211d;
+      --muted: #6a6359;
+      --accent: #235347;
+      --accent-soft: #d8ebe5;
+      --ok: #256548;
+      --warn: #92671f;
+      --fail: #943246;
     }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: Georgia, "Times New Roman", serif;
-      background: linear-gradient(180deg, #efe7d5 0%, var(--bg) 100%);
+      background:
+        radial-gradient(circle at top left, rgba(35, 83, 71, 0.08), transparent 28%),
+        linear-gradient(180deg, #ebe3d4 0%, var(--bg) 100%);
       color: var(--text);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
     }
     main {
       max-width: 1180px;
@@ -33,64 +37,25 @@ def get_planner_ui_html() -> str:
       padding: 24px;
     }
     h1, h2 {
-      margin: 0 0 12px;
+      margin: 0 0 10px;
       font-weight: 600;
       letter-spacing: 0.02em;
     }
-    p {
-      margin: 0 0 16px;
-    }
+    p { margin: 0 0 14px; }
     .grid {
       display: grid;
       gap: 16px;
       grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      align-items: start;
     }
     .panel {
-      background: var(--panel);
+      background: rgba(255, 250, 244, 0.92);
       border: 1px solid var(--border);
-      border-radius: 14px;
-      box-shadow: 0 8px 24px rgba(83, 58, 29, 0.08);
+      border-radius: 16px;
+      box-shadow: 0 10px 28px rgba(55, 42, 22, 0.08);
       padding: 18px;
     }
-    .stack {
-      display: grid;
-      gap: 12px;
-    }
-    label {
-      display: grid;
-      gap: 6px;
-      font-size: 0.95rem;
-    }
-    input, select, textarea, button {
-      font: inherit;
-    }
-    input, select, textarea {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px;
-      background: #fff;
-      color: var(--text);
-    }
-    textarea {
-      min-height: 150px;
-      resize: vertical;
-    }
-    button {
-      border: 1px solid var(--accent);
-      border-radius: 999px;
-      padding: 10px 16px;
-      background: var(--accent);
-      color: #fffaf0;
-      cursor: pointer;
-    }
-    button.secondary {
-      background: var(--accent-soft);
-      color: var(--accent);
-    }
-    button:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
-    }
+    .stack { display: grid; gap: 12px; }
     .row {
       display: flex;
       gap: 10px;
@@ -98,637 +63,339 @@ def get_planner_ui_html() -> str:
       align-items: center;
     }
     .muted {
-      color: #62563f;
-      font-size: 0.92rem;
+      color: var(--muted);
+      font-size: 0.93rem;
     }
     .badge {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
       border-radius: 999px;
-      padding: 4px 10px;
+      padding: 5px 11px;
       font-size: 0.82rem;
-      font-weight: 600;
+      font-weight: 700;
       letter-spacing: 0.03em;
     }
-    .badge.ok {
-      background: rgba(42, 107, 72, 0.12);
-      color: var(--ok);
+    .badge.ok { background: rgba(37, 101, 72, 0.12); color: var(--ok); }
+    .badge.warn { background: rgba(146, 103, 31, 0.12); color: var(--warn); }
+    .badge.fail { background: rgba(148, 50, 70, 0.12); color: var(--fail); }
+    label { display: grid; gap: 6px; font-size: 0.96rem; }
+    input, select, textarea, button {
+      font: inherit;
     }
-    .badge.warn {
-      background: rgba(139, 94, 26, 0.12);
-      color: var(--warn);
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--text);
+      padding: 10px 12px;
     }
-    .badge.fail {
-      background: rgba(140, 47, 57, 0.12);
-      color: var(--fail);
+    textarea {
+      min-height: 170px;
+      resize: vertical;
+    }
+    button {
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fffaf4;
+      padding: 10px 16px;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: var(--accent-soft);
+      color: var(--accent);
     }
     pre {
       margin: 0;
-      padding: 12px;
-      border-radius: 10px;
       border: 1px solid var(--border);
+      border-radius: 10px;
       background: #fff;
-      overflow-x: auto;
+      padding: 12px;
       white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 360px;
+      overflow-x: auto;
+      max-height: 380px;
     }
-    ul {
-      margin: 0;
-      padding-left: 18px;
-    }
-    .hidden {
-      display: none;
-    }
+    ul { margin: 0; padding-left: 18px; }
   </style>
 </head>
 <body>
   <main>
-    <div class="panel stack">
-      <h1>ComfyUIhybrid Planner Bridge</h1>
-      <p>Use the shared planner/helper service instead of duplicating planner logic locally. Policy lives on the main assistant backend; ComfyUIhybrid stores generated workflow configs locally for reuse.</p>
+    <section class="panel stack">
+      <h1>ComfyAI Local Planner</h1>
+      <p>Linux-first workflow planning now runs inside this repo. Falcon 10B 1.58 is the default local planner/helper baseline so routine workflow preparation no longer depends on the main assistant service.</p>
       <div class="row">
-        <span id="plannerStatusBadge" class="badge warn">Planner unknown</span>
-        <span id="comfyStatusBadge" class="badge warn">ComfyUI unknown</span>
-        <span class="muted" id="statusSummary"></span>
+        <span id="plannerBadge" class="badge warn">Planner unknown</span>
+        <span id="comfyBadge" class="badge warn">ComfyUI unknown</span>
+        <span id="linuxBadge" class="badge warn">Linux workstation unknown</span>
+        <span id="summaryLine" class="muted"></span>
       </div>
+    </section>
+
+    <div class="grid" style="margin-top: 16px;">
+      <section class="panel stack">
+        <h2>Local Planner: Falcon 10B 1.58</h2>
+        <div class="row">
+          <button id="refreshPlannerBtn" type="button" class="secondary">Refresh</button>
+          <button id="verifyPlannerBtn" type="button">Verify Planner</button>
+          <button id="rebuildPlannerBtn" type="button" class="secondary">Rebuild Planner Runtime</button>
+        </div>
+        <div id="plannerSummary" class="muted">Loading planner status...</div>
+        <ul id="plannerFacts">
+          <li>Loading planner facts...</li>
+        </ul>
+        <pre id="plannerRaw">Loading planner payload...</pre>
+      </section>
+
+      <section class="panel stack">
+        <h2>Linux Workstation</h2>
+        <div class="row">
+          <button id="refreshLinuxBtn" type="button" class="secondary">Refresh</button>
+          <button id="benchmarkLinuxBtn" type="button">Run Benchmark</button>
+        </div>
+        <div id="linuxSummary" class="muted">Loading Linux workstation policy...</div>
+        <ul id="linuxFacts">
+          <li>Loading Linux workstation details...</li>
+        </ul>
+        <pre id="linuxBenchmark">No benchmark captured yet.</pre>
+      </section>
     </div>
 
     <div class="grid" style="margin-top: 16px;">
       <section class="panel stack">
-        <h2>Planner Service</h2>
-        <label>
-          Main assistant repo path
-          <input id="assistantRepoPath" type="text" placeholder="Path to the main assistant backend repo">
-        </label>
-        <div class="row">
-          <span id="plannerServiceBadge" class="badge warn">Service unknown</span>
-          <button id="savePlannerServiceBtn" type="button" class="secondary">Save Repo Path</button>
-          <button id="startPlannerServiceBtn" type="button">Start Planner Service</button>
-          <button id="stopPlannerServiceBtn" type="button" class="secondary">Stop Planner Service</button>
-          <button id="refreshPlannerServiceBtn" type="button" class="secondary">Refresh Service</button>
-        </div>
-        <div class="muted" id="plannerServiceSummary"></div>
-        <pre id="plannerServiceRaw">Loading planner service status...</pre>
-      </section>
-
-      <section class="panel stack">
-        <h2>Planner Policy</h2>
-        <label>
-          Model mode selector
-          <select id="modeSelect">
-            <option value="manual">Manual</option>
-            <option value="auto">Auto</option>
-            <option value="research">Research</option>
-          </select>
-        </label>
-
-        <div id="manualSection" class="stack">
-          <label>
-            Manual model
-            <select id="manualModelSelect"></select>
-          </label>
-          <div class="muted">Manual mode uses the model list returned by <code>/planner/models</code>.</div>
-        </div>
-
-        <div id="autoSection" class="stack hidden">
-          <div class="muted" id="autoModeSummary">Auto mode defers model selection to the shared planner policy.</div>
-          <div class="muted" id="autoBestLadderStatus">No cached best ladder is available yet.</div>
-          <ul id="autoBestLadderDetails">
-            <li>No best ladder summary yet.</li>
-          </ul>
-        </div>
-
-        <div id="researchSection" class="stack hidden">
-          <label>
-            Passes
-            <input id="researchPasses" type="number" min="1" step="1" value="2">
-          </label>
-          <label>
-            Timeout seconds
-            <input id="researchTimeout" type="number" min="1" step="1" value="90">
-          </label>
-          <label>
-            Fallback model
-            <select id="researchFallbackSelect"></select>
-          </label>
-          <div class="row">
-            <button id="runResearchBtn" type="button">Run Research</button>
-          </div>
-          <div class="muted" id="researchBestLadderStatus">No best ladder has been mirrored locally yet.</div>
-          <ul id="researchBestLadderDetails">
-            <li>No best ladder summary yet.</li>
-          </ul>
-          <pre id="researchStatus">Research status will appear here.</pre>
-        </div>
-
-        <div class="row">
-          <button id="savePolicyBtn" type="button">Save Policy</button>
-          <button id="refreshPolicyBtn" type="button" class="secondary">Refresh</button>
-        </div>
-        <pre id="policyRaw">Loading policy...</pre>
-      </section>
-
-      <section class="panel stack">
         <h2>Make Workflow</h2>
         <label>
-          Request
-          <textarea id="workflowPrompt" placeholder="Describe the workflow you want the planner to produce."></textarea>
+          Prompt
+          <textarea id="promptInput" placeholder="Describe the workflow you want to generate."></textarea>
+        </label>
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+          <label>
+            Workflow profile
+            <select id="workflowProfileSelect">
+              <option value="preview">preview</option>
+              <option value="quality">quality</option>
+              <option value="first_last_frame">first_last_frame</option>
+              <option value="blender_guided">blender_guided</option>
+            </select>
+          </label>
+          <label>
+            Width
+            <input id="widthInput" type="number" min="64" step="64" placeholder="1024">
+          </label>
+          <label>
+            Height
+            <input id="heightInput" type="number" min="64" step="64" placeholder="1024">
+          </label>
+        </div>
+        <label>
+          <input id="queueToggle" type="checkbox">
+          Queue workflow in ComfyUI after validation
+        </label>
+        <label>
+          <input id="lowImpactToggle" type="checkbox" checked>
+          Low workstation impact mode
         </label>
         <div class="row">
-          <button id="runWorkflowBtn" type="button">Make Workflow</button>
-          <button id="clearEventsBtn" type="button" class="secondary">Clear Events</button>
+          <button id="runPlannerBtn" type="button">Generate Plan</button>
+          <button id="refreshWorkflowsBtn" type="button" class="secondary">Refresh Saved Workflows</button>
         </div>
-        <div class="muted">The event log shows streamed <code>tool_call</code> and <code>tool_result</code> events from the shared helper pipeline.</div>
-        <pre id="eventLog">No events yet.</pre>
+        <pre id="plannerEvents">Planner events will appear here.</pre>
+      </section>
+
+      <section class="panel stack">
+        <h2>Saved Workflows</h2>
+        <div id="workflowSummary" class="muted">Loading generated workflows...</div>
+        <ul id="workflowList">
+          <li>No saved workflows yet.</li>
+        </ul>
       </section>
     </div>
-
-    <section class="panel stack" style="margin-top: 16px;">
-      <h2>Saved Workflow Configs</h2>
-      <div class="muted">Generated workflow configs are stored in the local workspace area so ComfyUIhybrid can reuse them later without copying planner logic into this repo.</div>
-      <ul id="savedWorkflows">
-        <li>No saved workflows yet.</li>
-      </ul>
-    </section>
   </main>
 
   <script>
-    const state = {
-      models: [],
-      policy: {},
-      plannerService: {},
-      bestLadderCache: {},
-    };
+    const plannerBadge = document.getElementById("plannerBadge");
+    const comfyBadge = document.getElementById("comfyBadge");
+    const linuxBadge = document.getElementById("linuxBadge");
+    const summaryLine = document.getElementById("summaryLine");
+    const plannerSummary = document.getElementById("plannerSummary");
+    const plannerFacts = document.getElementById("plannerFacts");
+    const plannerRaw = document.getElementById("plannerRaw");
+    const linuxSummary = document.getElementById("linuxSummary");
+    const linuxFacts = document.getElementById("linuxFacts");
+    const linuxBenchmark = document.getElementById("linuxBenchmark");
+    const plannerEvents = document.getElementById("plannerEvents");
+    const workflowSummary = document.getElementById("workflowSummary");
+    const workflowList = document.getElementById("workflowList");
 
-    function setBadge(element, ok, warnText, okText, failText) {
-      element.className = "badge " + (ok === true ? "ok" : (ok === false ? "fail" : "warn"));
-      element.textContent = ok === true ? okText : (ok === false ? failText : warnText);
+    function badgeClass(ok, warnText) {
+      if (ok === true) return "badge ok";
+      if (ok === false) return "badge fail";
+      return "badge warn";
     }
 
-    function pretty(value) {
-      return JSON.stringify(value, null, 2);
+    function setBadge(node, text, ok) {
+      node.textContent = text;
+      node.className = badgeClass(ok, text);
     }
 
-    function appendEvent(value) {
-      const eventLog = document.getElementById("eventLog");
-      const prefix = eventLog.textContent === "No events yet." ? "" : eventLog.textContent + "\\n";
-      eventLog.textContent = prefix + pretty(value);
-      eventLog.scrollTop = eventLog.scrollHeight;
-    }
-
-    function normalizeModels(payload) {
-      if (Array.isArray(payload)) {
-        return payload;
-      }
-      if (Array.isArray(payload.models)) {
-        return payload.models;
-      }
-      if (Array.isArray(payload.items)) {
-        return payload.items;
-      }
-      return [];
-    }
-
-    function modelName(item) {
-      if (typeof item === "string") {
-        return item;
-      }
-      if (item && typeof item === "object") {
-        return item.id || item.model || item.name || JSON.stringify(item);
-      }
-      return String(item);
-    }
-
-    function formatTimestamp(value) {
-      if (!value) {
-        return "";
-      }
-      const parsed = new Date(value);
-      if (Number.isNaN(parsed.getTime())) {
-        return String(value);
-      }
-      return parsed.toLocaleString();
-    }
-
-    function normalizeBestLadderCache(cache) {
-      const summary = cache && typeof cache === "object" ? (cache.summary || {}) : {};
-      const normalizeList = (value) => {
-        if (Array.isArray(value)) {
-          return value.map((item) => String(item)).filter(Boolean);
-        }
-        if (value == null || value === "") {
-          return [];
-        }
-        return [String(value)];
-      };
-      return {
-        available: Boolean(cache && cache.available),
-        savedAt: cache ? (cache.saved_at || null) : null,
-        displayTimestamp: cache ? (cache.display_timestamp || cache.saved_at || null) : null,
-        source: cache ? (cache.source || "planner_policy") : "planner_policy",
-        policyMode: cache ? (cache.policy_mode || null) : null,
-        headline: summary.headline || "",
-        baseline: normalizeList(summary.baseline),
-        tierMappings: normalizeList(summary.tier_mappings),
-        thresholds: normalizeList(summary.thresholds),
-      };
-    }
-
-    function renderBestLadderList(elementId, cache) {
-      const list = document.getElementById(elementId);
-      list.innerHTML = "";
-      const lines = [];
-      for (const item of cache.baseline) {
-        lines.push("Baseline: " + item);
-      }
-      for (const item of cache.tierMappings) {
-        lines.push("Tier: " + item);
-      }
-      for (const item of cache.thresholds) {
-        lines.push("Threshold: " + item);
-      }
-      if (!lines.length) {
-        const li = document.createElement("li");
-        li.textContent = "No best ladder summary yet.";
-        list.appendChild(li);
-        return;
-      }
-      for (const line of lines) {
-        const li = document.createElement("li");
-        li.textContent = line;
-        list.appendChild(li);
-      }
-    }
-
-    function applyBestLadderCache(cache) {
-      state.bestLadderCache = normalizeBestLadderCache(cache || {});
-      const ladder = state.bestLadderCache;
-      const autoSummary = document.getElementById("autoModeSummary");
-      const autoStatus = document.getElementById("autoBestLadderStatus");
-      const researchStatus = document.getElementById("researchBestLadderStatus");
-
-      if (ladder.available) {
-        const timestamp = formatTimestamp(ladder.displayTimestamp);
-        autoSummary.textContent = "Auto mode defers model selection to the shared planner policy.";
-        autoStatus.textContent = "Auto using best ladder from " + timestamp + ".";
-        researchStatus.textContent =
-          "Best ladder mirrored locally" +
-          (timestamp ? (" from " + timestamp) : "") +
-          ".";
-      } else {
-        autoSummary.textContent = "Auto mode defers model selection to the shared planner policy.";
-        autoStatus.textContent = "No cached best ladder is available yet.";
-        researchStatus.textContent = "No best ladder has been mirrored locally yet.";
-      }
-
-      renderBestLadderList("autoBestLadderDetails", ladder);
-      renderBestLadderList("researchBestLadderDetails", ladder);
-    }
-
-    function buildPolicyPayload() {
-      const manualModel = document.getElementById("manualModelSelect").value;
-      const fallbackModel = document.getElementById("researchFallbackSelect").value;
-      const next = Object.assign({}, state.policy || {});
-      next.mode = document.getElementById("modeSelect").value;
-      next.manual = Object.assign({}, next.manual || {}, {
-        model: manualModel,
-      });
-      next.research = Object.assign({}, next.research || {}, {
-        passes: Number(document.getElementById("researchPasses").value || 2),
-        timeout_seconds: Number(document.getElementById("researchTimeout").value || 90),
-        fallback_model: fallbackModel,
-      });
-      return next;
-    }
-
-    function applyPolicy(policy) {
-      state.policy = policy || {};
-      const mode = state.policy.mode || "auto";
-      document.getElementById("modeSelect").value = mode;
-      const manualModel = (state.policy.manual || {}).model || "";
-      if (manualModel) {
-        document.getElementById("manualModelSelect").value = manualModel;
-      }
-      const research = state.policy.research || {};
-      if (research.passes != null) {
-        document.getElementById("researchPasses").value = research.passes;
-      }
-      if (research.timeout_seconds != null) {
-        document.getElementById("researchTimeout").value = research.timeout_seconds;
-      }
-      if (research.fallback_model) {
-        document.getElementById("researchFallbackSelect").value = research.fallback_model;
-      }
-      document.getElementById("policyRaw").textContent = pretty(policy);
-      toggleModeSections();
-      if (policy && policy.auto_best_ladder_cache) {
-        applyBestLadderCache(policy.auto_best_ladder_cache);
-      }
-    }
-
-    function populateModels(models) {
-      state.models = normalizeModels(models);
-      const manual = document.getElementById("manualModelSelect");
-      const fallback = document.getElementById("researchFallbackSelect");
-      manual.innerHTML = "";
-      fallback.innerHTML = "";
-      if (!state.models.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "No models available";
-        manual.appendChild(option);
-        fallback.appendChild(option.cloneNode(true));
-        return;
-      }
-      for (const item of state.models) {
-        const name = modelName(item);
-        const option = document.createElement("option");
-        option.value = name;
-        option.textContent = name;
-        manual.appendChild(option);
-        fallback.appendChild(option.cloneNode(true));
-      }
-    }
-
-    function toggleModeSections() {
-      const mode = document.getElementById("modeSelect").value;
-      document.getElementById("manualSection").classList.toggle("hidden", mode !== "manual");
-      document.getElementById("autoSection").classList.toggle("hidden", mode !== "auto");
-      document.getElementById("researchSection").classList.toggle("hidden", mode !== "research");
-    }
-
-    async function fetchJson(path, options) {
-      const response = await fetch(path, options);
+    async function getJson(url, options) {
+      const response = await fetch(url, options);
+      const payload = await response.json();
       if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || ("Request failed: " + response.status));
+        throw new Error(payload.detail || payload.error || response.statusText);
       }
-      return await response.json();
+      return payload;
     }
 
-    function applyPlannerServiceStatus(status) {
-      state.plannerService = status || {};
-      document.getElementById("assistantRepoPath").value = status.assistant_repo_path || "";
-
-      const healthy = status.healthy === true;
-      const unhealthy = status.healthy === false;
-      setBadge(
-        document.getElementById("plannerStatusBadge"),
-        healthy ? true : (unhealthy ? false : null),
-        "Planner unknown",
-        "Planner healthy",
-        "Planner down"
-      );
-      setBadge(
-        document.getElementById("plannerServiceBadge"),
-        healthy ? true : (unhealthy ? false : null),
-        "Service unknown",
-        "Service healthy",
-        "Service down"
-      );
-
-      document.getElementById("plannerServiceSummary").textContent =
-        "Health " + (status.health_url || "") +
-        " | repo " + (status.assistant_repo_path || "(not set)") +
-        " | can_start=" + String(Boolean(status.can_start)) +
-        " | can_stop=" + String(Boolean(status.can_stop));
-      document.getElementById("plannerServiceRaw").textContent = pretty(status);
-      document.getElementById("statusSummary").textContent =
-        "Planner " + (status.base_url || "") + " | ComfyUI " + (document.getElementById("statusSummary").dataset.comfyUrl || "");
-
-      document.getElementById("startPlannerServiceBtn").disabled = !Boolean(status.can_start) || Boolean(status.healthy);
-      document.getElementById("stopPlannerServiceBtn").disabled = !Boolean(status.can_stop) && !Boolean(status.healthy);
-      document.getElementById("savePolicyBtn").disabled = !Boolean(status.healthy);
-      document.getElementById("runResearchBtn").disabled = !Boolean(status.healthy);
-      document.getElementById("runWorkflowBtn").disabled = !Boolean(status.healthy);
-    }
-
-    async function loadStatus() {
-      const data = await fetchJson("/setup/status");
-      const comfy = data.comfyui || {};
-      const planner = data.planner || {};
-      setBadge(
-        document.getElementById("comfyStatusBadge"),
-        comfy.reachable === true,
-        "ComfyUI unknown",
-        "ComfyUI reachable",
-        "ComfyUI unreachable"
-      );
-      document.getElementById("statusSummary").dataset.comfyUrl = comfy.base_url || "";
-      applyBestLadderCache(planner.auto_best_ladder_cache || {});
-      return data;
-    }
-
-    async function loadPlannerServiceStatus() {
-      const data = await fetchJson("/planner/service/status");
-      applyPlannerServiceStatus(data);
-      return data;
-    }
-
-    async function loadPolicyAndModels() {
-      if (!state.plannerService.healthy) {
-        populateModels([]);
-        document.getElementById("policyRaw").textContent = "Planner service is not running.";
-        document.getElementById("researchStatus").textContent = "Planner service is not running.";
-        return;
-      }
-      try {
-        const [models, policy] = await Promise.all([
-          fetchJson("/planner/models"),
-          fetchJson("/planner/policy"),
-        ]);
-        populateModels(models);
-        applyPolicy(policy);
-        await loadStatus();
-      } catch (error) {
-        document.getElementById("policyRaw").textContent = String(error);
-      }
-    }
-
-    async function loadSavedWorkflows() {
-      const data = await fetchJson("/workspace/workflows");
-      const list = document.getElementById("savedWorkflows");
-      list.innerHTML = "";
-      const items = Array.isArray(data.items) ? data.items : [];
+    function setList(node, items) {
+      node.innerHTML = "";
       if (!items.length) {
         const li = document.createElement("li");
-        li.textContent = "No saved workflows yet.";
-        list.appendChild(li);
+        li.textContent = "None";
+        node.appendChild(li);
         return;
       }
       for (const item of items) {
         const li = document.createElement("li");
-        li.textContent = item.name + " | " + item.relative_path + " | " + item.modified_at;
-        list.appendChild(li);
+        li.textContent = item;
+        node.appendChild(li);
       }
     }
 
-    async function savePlannerServiceConfig() {
-      const payload = {
-        assistant_repo_path: document.getElementById("assistantRepoPath").value.trim(),
-      };
-      const data = await fetchJson("/planner/service/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      applyPlannerServiceStatus(data);
-      return data;
+    function renderPlanner(planner) {
+      const ready = Boolean(planner.ready);
+      const lastVerify = planner.last_verify_at || "never";
+      setBadge(plannerBadge, ready ? "Planner ready" : `Planner ${planner.status || "unknown"}`, ready ? true : planner.model_present ? false : null);
+      plannerSummary.textContent = `mode=${planner.mode || "local"} | status=${planner.status || "unknown"} | last verify=${lastVerify}`;
+      setList(plannerFacts, [
+        `model id: ${planner.default_model_id || "unknown"}`,
+        `model path: ${planner.model_path || "unresolved"}`,
+        `platform target: ${planner.platform_target || "linux"}`,
+        `repairs before fail: ${planner.max_repairs_before_fail ?? "unknown"}`,
+        `request timeout seconds: ${planner.request_timeout_seconds ?? "unknown"}`,
+        `planner output dir: ${planner.planner_output_dir || "unknown"}`,
+      ]);
+      plannerRaw.textContent = JSON.stringify(planner, null, 2);
     }
 
-    async function startPlannerService() {
-      document.getElementById("plannerServiceRaw").textContent = "Starting planner service...";
-      const payload = {
-        assistant_repo_path: document.getElementById("assistantRepoPath").value.trim(),
-      };
-      try {
-        const data = await fetchJson("/planner/service/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        applyPlannerServiceStatus(data.status || {});
-        await loadPolicyAndModels();
-      } catch (error) {
-        document.getElementById("plannerServiceRaw").textContent = String(error);
-      }
+    function renderComfy(comfy) {
+      const ok = Boolean(comfy.health_ok) && Boolean(comfy.object_info_probe && comfy.object_info_probe.ok);
+      setBadge(comfyBadge, ok ? "ComfyUI ready" : "ComfyUI verify needed", ok);
     }
 
-    async function stopPlannerService() {
-      document.getElementById("plannerServiceRaw").textContent = "Stopping planner service...";
+    function renderLinux(linux) {
+      const ready = Boolean(linux.capabilities && linux.capabilities.ltx_video_node_available);
+      setBadge(linuxBadge, ready ? "Linux workstation ready" : "Linux workstation partial", ready ? true : null);
+      linuxSummary.textContent = `${linux.machine_label || "Linux workstation"} | profile=${linux.active_profile || "unknown"}`;
+      setList(linuxFacts, [
+        `role: ${linux.role_label || linux.role || "unknown"}`,
+        `recommended profile: ${(linux.recommended_config || {}).workflow_profile || "unknown"}`,
+        `async offload: ${String(((linux.recommended_config || {}).optimizations || {}).async_offload)}`,
+        `pinned memory: ${String(((linux.recommended_config || {}).optimizations || {}).pinned_memory)}`,
+        `weight streaming: ${String(((linux.recommended_config || {}).optimizations || {}).weight_streaming)}`,
+      ]);
+    }
+
+    function renderWorkflows(payload) {
+      workflowSummary.textContent = `${payload.count || 0} saved workflow${payload.count === 1 ? "" : "s"}`;
+      const items = (payload.items || []).map((item) => `${item.name} | ${item.relative_path}`);
+      setList(workflowList, items);
+    }
+
+    async function refreshStatus() {
+      const status = await getJson("/setup/status");
+      renderPlanner(status.planner || {});
+      renderComfy(status.comfyui || {});
+      renderLinux(status.linux_workstation || {});
+      summaryLine.textContent = `planner=${(status.planner || {}).status || "unknown"} | comfy=${(status.comfyui || {}).health_ok ? "healthy" : "not ready"} | generated workflows dir=${(status.workspace || {}).generated_workflows_dir || "unknown"}`;
+      const workflows = await getJson("/workspace/workflows");
+      renderWorkflows(workflows);
+    }
+
+    async function verifyPlanner() {
+      plannerEvents.textContent = "Verifying local planner...";
       try {
-        const data = await fetchJson("/planner/service/stop", {
+        const payload = await getJson("/planner/verify", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {"Content-Type": "application/json"},
           body: JSON.stringify({}),
         });
-        applyPlannerServiceStatus(data.status || {});
-        await loadPolicyAndModels();
+        plannerEvents.textContent = JSON.stringify(payload, null, 2);
+        await refreshStatus();
       } catch (error) {
-        document.getElementById("plannerServiceRaw").textContent = String(error);
+        plannerEvents.textContent = String(error);
       }
     }
 
-    async function savePolicy() {
-      if (!state.plannerService.healthy) {
-        document.getElementById("policyRaw").textContent = "Planner service is not running.";
-        return;
-      }
-      const payload = buildPolicyPayload();
-      const data = await fetchJson("/planner/policy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      applyPolicy(data);
-    }
-
-    async function runResearch() {
-      if (!state.plannerService.healthy) {
-        document.getElementById("researchStatus").textContent = "Planner service is not running.";
-        return;
-      }
-      const payload = buildPolicyPayload();
-      payload.mode = "research";
-      const status = document.getElementById("researchStatus");
-      status.textContent = "Running research...";
+    async function rebuildPlanner() {
+      plannerEvents.textContent = "Rebuilding planner runtime...";
       try {
-        const data = await fetchJson("/planner/research/run", {
+        const payload = await getJson("/planner/rebuild", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({}),
+        });
+        plannerEvents.textContent = JSON.stringify(payload, null, 2);
+        await refreshStatus();
+      } catch (error) {
+        plannerEvents.textContent = String(error);
+      }
+    }
+
+    async function runBenchmark() {
+      linuxBenchmark.textContent = "Running Linux benchmark...";
+      try {
+        const payload = await getJson("/setup/benchmark", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({}),
+        });
+        linuxBenchmark.textContent = JSON.stringify(payload, null, 2);
+        await refreshStatus();
+      } catch (error) {
+        linuxBenchmark.textContent = String(error);
+      }
+    }
+
+    async function runPlanner() {
+      plannerEvents.textContent = "Generating local plan...";
+      const payload = {
+        prompt: document.getElementById("promptInput").value,
+        workflow_profile: document.getElementById("workflowProfileSelect").value,
+        low_workstation_impact: document.getElementById("lowImpactToggle").checked,
+        queue_workflow: document.getElementById("queueToggle").checked,
+      };
+      const width = document.getElementById("widthInput").value;
+      const height = document.getElementById("heightInput").value;
+      if (width) payload.width = Number(width);
+      if (height) payload.height = Number(height);
+      try {
+        const response = await fetch("/helper/process", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
           body: JSON.stringify(payload),
         });
-        status.textContent = pretty(data);
-        if (data && data.auto_best_ladder_cache) {
-          applyBestLadderCache(data.auto_best_ladder_cache);
-        }
-        await loadPolicyAndModels();
+        const text = await response.text();
+        const lines = text.split("\\n").filter((line) => line.trim()).map((line) => {
+          try { return JSON.parse(line); } catch (_) { return {raw: line}; }
+        });
+        plannerEvents.textContent = JSON.stringify(lines, null, 2);
+        await refreshStatus();
       } catch (error) {
-        status.textContent = String(error);
+        plannerEvents.textContent = String(error);
       }
     }
 
-    async function runWorkflow() {
-      const prompt = document.getElementById("workflowPrompt").value.trim();
-      if (!prompt) {
-        appendEvent({ event: "error", message: "Enter a workflow request first." });
-        return;
-      }
-      if (!state.plannerService.healthy) {
-        appendEvent({ event: "error", message: "Planner service is not running." });
-        return;
-      }
-      document.getElementById("eventLog").textContent = "Streaming events...";
-      const payload = {
-        action: "make_workflow",
-        prompt: prompt,
-        request: prompt,
-        planner_policy: buildPolicyPayload(),
-        mode: document.getElementById("modeSelect").value,
-      };
-      const response = await fetch("/helper/process", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok || !response.body) {
-        const detail = await response.text();
-        appendEvent({ event: "error", message: detail || ("Request failed: " + response.status) });
-        return;
-      }
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for await (const chunk of response.body) {
-        buffer += decoder.decode(chunk, { stream: true });
-        const lines = buffer.split("\\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) {
-          const text = line.trim();
-          if (!text) {
-            continue;
-          }
-          try {
-            const event = JSON.parse(text);
-            appendEvent(event);
-            if (event.event === "workflow_saved") {
-              await loadSavedWorkflows();
-            }
-          } catch (error) {
-            appendEvent({ event: "text", data: text });
-          }
-        }
-      }
-      if (buffer.trim()) {
-        try {
-          appendEvent(JSON.parse(buffer.trim()));
-        } catch (error) {
-          appendEvent({ event: "text", data: buffer.trim() });
-        }
-      }
-    }
+    document.getElementById("refreshPlannerBtn").addEventListener("click", refreshStatus);
+    document.getElementById("verifyPlannerBtn").addEventListener("click", verifyPlanner);
+    document.getElementById("rebuildPlannerBtn").addEventListener("click", rebuildPlanner);
+    document.getElementById("refreshLinuxBtn").addEventListener("click", refreshStatus);
+    document.getElementById("benchmarkLinuxBtn").addEventListener("click", runBenchmark);
+    document.getElementById("runPlannerBtn").addEventListener("click", runPlanner);
+    document.getElementById("refreshWorkflowsBtn").addEventListener("click", refreshStatus);
 
-    async function refreshAll() {
-      await loadStatus();
-      await loadPlannerServiceStatus();
-      await loadPolicyAndModels();
-      await loadSavedWorkflows();
-    }
-
-    document.getElementById("modeSelect").addEventListener("change", toggleModeSections);
-    document.getElementById("savePlannerServiceBtn").addEventListener("click", savePlannerServiceConfig);
-    document.getElementById("startPlannerServiceBtn").addEventListener("click", startPlannerService);
-    document.getElementById("stopPlannerServiceBtn").addEventListener("click", stopPlannerService);
-    document.getElementById("refreshPlannerServiceBtn").addEventListener("click", refreshAll);
-    document.getElementById("savePolicyBtn").addEventListener("click", savePolicy);
-    document.getElementById("refreshPolicyBtn").addEventListener("click", loadPolicyAndModels);
-    document.getElementById("runResearchBtn").addEventListener("click", runResearch);
-    document.getElementById("runWorkflowBtn").addEventListener("click", runWorkflow);
-    document.getElementById("clearEventsBtn").addEventListener("click", () => {
-      document.getElementById("eventLog").textContent = "No events yet.";
-    });
-
-    refreshAll().catch((error) => {
-      document.getElementById("eventLog").textContent = String(error);
+    refreshStatus().catch((error) => {
+      summaryLine.textContent = String(error);
     });
   </script>
 </body>

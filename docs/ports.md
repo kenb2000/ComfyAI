@@ -11,6 +11,12 @@ The allocator behavior is:
 
 This lets multiple repos coexist on one machine without hand-editing local ports.
 
+Ephemeral setup-server binds are also supported:
+
+- `scripts/comfyhybrid_setup_flow.py --server-port 0` asks the OS for any free local port.
+- The chosen port is printed by the wrapper and surfaced through `/ports/status`.
+- Use this when the default setup port is already busy and you only need a temporary local control plane.
+
 ## Master Registry
 
 The shared registry file lives outside any single repo.
@@ -53,6 +59,11 @@ These ComfyUIhybrid entry points now allocate ports safely before binding or spa
 - `prompt_layer.setup_runtime.launch_comfyui_sidecar`
 - `prompt_layer.setup_runtime.launch_planner_sidecar`
 - `comfyui/main.py`
+
+The built-in local planner does not bind its own port. It runs inside the setup
+server process and validates against the configured ComfyUI address. Only the
+optional assistant sidecar path under `launch_planner_sidecar` consumes a
+separate planner service port.
 
 The actual assigned port is surfaced through:
 

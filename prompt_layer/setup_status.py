@@ -5,6 +5,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from .linux_workstation import detect_linux_workstation_capabilities
+from .planner.config import build_local_planner_status
 from .ports import default_app_id, repo_port_status, resolve_registered_port
 from .setup_config import (
     DEFAULT_MANIFEST_PATH,
@@ -20,6 +22,7 @@ from .setup_config import (
     resolve_workspace_paths,
 )
 from .setup_runtime import _probe_http
+from .setup_runtime import _probe_json_http
 from .setup_runtime import describe_service_port
 from .setup_runtime import planner_health_url
 from .setup_runtime import resolve_planner_base_url
@@ -143,6 +146,15 @@ def collect_setup_status(
     comfy_base_url = f"http://{comfy_bind}:{comfy_port}"
     health_endpoint = str(comfy_settings.get("health_endpoint", "/system_stats"))
     comfy_probe = _probe_http(f"{comfy_base_url}{health_endpoint}", timeout=timeout)
+    object_info_endpoint = str(comfy_settings.get("object_info_endpoint", "/object_info"))
+    object_info_url = f"{comfy_base_url}{object_info_endpoint}"
+    if comfy_probe["ok"]:
+        object_info_probe, object_info_payload = _probe_json_http(object_info_url, timeout=timeout)
+    else:
+        object_info_probe, object_info_payload = (
+            {"reachable": False, "ok": False, "status_code": None, "detail": "health_check_failed"},
+            None,
+        )
     comfy_port_status = describe_service_port(
         comfy_bind,
         comfy_port,
@@ -167,6 +179,17 @@ def collect_setup_status(
         probe_url=planner_health,
         probe=planner_probe,
         timeout=planner_probe_timeout,
+    )
+    linux_workstation = detect_linux_workstation_capabilities(
+        settings,
+        project_root_path,
+        comfy_root,
+        object_info_payload=object_info_payload,
+    )
+    local_planner = build_local_planner_status(
+        settings,
+        project_root_path,
+        object_info_ok=bool(object_info_probe.get("ok")),
     )
 
     return {
@@ -195,28 +218,35 @@ def collect_setup_status(
             "port": comfy_port,
             "base_url": comfy_base_url,
             "health_endpoint": health_endpoint,
-            "object_info_endpoint": str(comfy_settings.get("object_info_endpoint", "/object_info")),
+            "object_info_endpoint": object_info_endpoint,
+            "object_info_url": object_info_url,
+            "object_info_probe": object_info_probe,
             "launch_args": list(comfy_settings.get("launch_args", [])),
             "probe": comfy_probe,
             "port_status": comfy_port_status,
         },
         "planner": {
-            "base_url": planner_base_url,
-            "health_endpoint": str(planner_settings.get("health_endpoint", "/health")),
-            "health_url": planner_health,
-            "reachable": planner_probe["reachable"],
-            "healthy": planner_probe["ok"],
-            "probe": planner_probe,
-            "port_status": planner_port_status,
-            "optional": bool(planner_settings.get("optional", True)),
-            "can_launch_as_sidecar": bool(planner_settings.get("can_launch_as_sidecar", False)),
-            "assistant_repo_path": str(assistant_repo_path.resolve()) if assistant_repo_path is not None else None,
-            "assistant_repo_path_source": assistant_repo_source,
-            "assistant_repo_configured": bool(assistant_repo_path),
-            "assistant_repo_exists": assistant_repo_exists,
-            "sidecar_launch": planner_settings.get("sidecar_launch", {}),
-            "auto_best_ladder_cache": planner_settings.get("auto_best_ladder_cache", {}),
+            **local_planner,
+            "last_verify_timestamp": local_planner.get("last_verify_at"),
+            "assistant_service": {
+                "base_url": planner_base_url,
+                "health_endpoint": str(planner_settings.get("health_endpoint", "/health")),
+                "health_url": planner_health,
+                "reachable": planner_probe["reachable"],
+                "healthy": planner_probe["ok"],
+                "probe": planner_probe,
+                "port_status": planner_port_status,
+                "optional": bool(planner_settings.get("optional", True)),
+                "can_launch_as_sidecar": bool(planner_settings.get("can_launch_as_sidecar", False)),
+                "assistant_repo_path": str(assistant_repo_path.resolve()) if assistant_repo_path is not None else None,
+                "assistant_repo_path_source": assistant_repo_source,
+                "assistant_repo_configured": bool(assistant_repo_path),
+                "assistant_repo_exists": assistant_repo_exists,
+                "sidecar_launch": planner_settings.get("sidecar_launch", {}),
+                "auto_best_ladder_cache": planner_settings.get("auto_best_ladder_cache", {}),
+            },
         },
+        "linux_workstation": linux_workstation,
         "optional_models": _collect_optional_models_status(manifest, project_root_path, comfy_root),
         "ports": repo_port_status(app_id=app_id),
     }

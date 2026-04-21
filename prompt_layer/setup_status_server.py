@@ -14,7 +14,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .ports import allocate_port, default_app_id, default_port_range, record_reservation, repo_port_status, write_local_port_state
-from .planner_client import PlannerClient, PlannerClientError
+from .planner import LocalPlannerError, LocalPlannerRuntime
+from .planner.config import build_local_planner_policy, build_local_planner_status, write_local_planner_policy
 from .planner_ui import get_planner_ui_html
 from .setup_config import (
     DEFAULT_MANIFEST_PATH,
@@ -27,12 +28,17 @@ from .setup_config import (
     save_settings,
 )
 from .setup_runtime import (
+    _probe_json_http,
+    acquire_local_planner_runtime,
+    benchmark_linux_workstation,
+    build_linux_runtime_plan,
     launch_planner_sidecar,
     make_progress_event,
     planner_service_status,
     resolve_planner_base_url,
     run_setup_acquire,
     stop_planner_sidecar,
+    verify_local_planner_runtime,
     verify_setup,
     wait_for_http,
     wait_for_unreachable,
@@ -45,8 +51,6 @@ WORKFLOW_RESULT_KEYS = {
     "workflow_config",
     "workflow_json",
     "graph",
-    "comfy_prompt",
-    "comfyui_prompt",
     "result",
     "payload",
     "data",
@@ -79,6 +83,8 @@ def _extract_workflow_candidates(event: dict[str, Any]) -> list[tuple[str, Any]]
 
     def visit(value: Any, label: str, depth: int) -> None:
         if depth > 5:
+            return
+        if label.endswith("comfy_prompt") or label.endswith("comfyui_prompt"):
             return
         if isinstance(value, (dict, list)):
             marker = id(value)
@@ -440,10 +446,9 @@ def make_setup_status_handler(
                 manifest_path=manifest_file,
             )
 
-        def _planner_client(self) -> PlannerClient:
+        def _planner_runtime(self) -> LocalPlannerRuntime:
             settings = self._load_settings()
-            base_url = resolve_planner_base_url(settings, project_root_path)
-            return PlannerClient(base_url=base_url)
+            return LocalPlannerRuntime(settings, project_root_path)
 
         def _save_settings_patch(self, patch: dict[str, Any]) -> dict[str, Any]:
             current = self._load_settings()
@@ -451,14 +456,11 @@ def make_setup_status_handler(
             save_settings(merged, settings_file)
             return merged
 
-        def _sync_auto_best_ladder_cache(self, policy: Any) -> dict[str, Any]:
+        def _persist_local_planner_policy(self) -> dict[str, Any]:
             current = self._load_settings()
-            next_cache = _build_auto_best_ladder_cache(policy)
-            existing_cache = current.get("planner", {}).get("auto_best_ladder_cache", {})
-            if existing_cache != next_cache:
-                current = deep_merge(current, {"planner": {"auto_best_ladder_cache": next_cache}})
-                save_settings(current, settings_file)
-            return next_cache
+            policy = build_local_planner_policy(current, project_root_path)
+            write_local_planner_policy(current, project_root_path)
+            return policy
 
         def _write_json(self, status_code: int, payload: Any) -> None:
             body = json.dumps(payload, indent=2).encode("utf-8")
@@ -508,25 +510,21 @@ def make_setup_status_handler(
                 return
 
             if path != "/setup/status":
+                if path == "/planner/status":
+                    status_snapshot = collect_setup_status(
+                        manifest_path=manifest_file,
+                        settings_path=settings_file,
+                        project_root=project_root_path,
+                    )
+                    self._write_json(200, status_snapshot.get("planner", {}))
+                    return
+
                 if path == "/planner/policy":
-                    try:
-                        policy = self._planner_client().get_policy()
-                        cache = self._sync_auto_best_ladder_cache(policy)
-                        if isinstance(policy, dict):
-                            payload = dict(policy)
-                            payload["auto_best_ladder_cache"] = cache
-                        else:
-                            payload = {"policy": policy, "auto_best_ladder_cache": cache}
-                        self._write_json(200, payload)
-                    except PlannerClientError as exc:
-                        self._write_json(502, {"error": "planner_unavailable", "detail": str(exc)})
+                    self._write_json(200, self._persist_local_planner_policy())
                     return
 
                 if path == "/planner/models":
-                    try:
-                        self._write_json(200, self._planner_client().get_models())
-                    except PlannerClientError as exc:
-                        self._write_json(502, {"error": "planner_unavailable", "detail": str(exc)})
+                    self._write_json(200, self._planner_runtime().models())
                     return
 
                 if path == "/planner/service/status":
@@ -605,33 +603,104 @@ def make_setup_status_handler(
                 self._write_json(200, result)
                 return
 
-            if path == "/planner/policy":
+            if path == "/setup/benchmark":
                 try:
-                    policy = self._planner_client().set_policy(payload)
-                    cache = self._sync_auto_best_ladder_cache(policy)
-                    if isinstance(policy, dict):
-                        response_payload = dict(policy)
-                        response_payload["auto_best_ladder_cache"] = cache
-                    else:
-                        response_payload = {"policy": policy, "auto_best_ladder_cache": cache}
-                    self._write_json(200, response_payload)
-                except PlannerClientError as exc:
-                    self._write_json(502, {"error": "planner_unavailable", "detail": str(exc)})
+                    result = benchmark_linux_workstation(
+                        payload=payload,
+                        settings_path=settings_file,
+                        manifest_path=manifest_file,
+                        project_root=project_root_path,
+                    )
+                except Exception as exc:
+                    self._write_json(500, {"error": "benchmark_failed", "detail": str(exc)})
+                    return
+                self._write_json(200, result)
+                return
+
+            if path == "/planner/verify":
+                settings = self._load_settings()
+                status_snapshot = collect_setup_status(
+                    manifest_path=manifest_file,
+                    settings_path=settings_file,
+                    project_root=project_root_path,
+                )
+                comfy_snapshot = status_snapshot.get("comfyui", {})
+                comfy_base_url = str(comfy_snapshot.get("base_url") or "").strip() or None
+                object_info_payload = None
+                object_info_url = str(comfy_snapshot.get("object_info_url") or "").strip()
+                if object_info_url:
+                    _, object_info_payload = _probe_json_http(object_info_url, timeout=2.0)
+                try:
+                    verify_result = verify_local_planner_runtime(
+                        settings,
+                        settings_file,
+                        project_root_path,
+                        object_info_payload=object_info_payload,
+                        comfy_base_url=comfy_base_url,
+                    )
+                except Exception as exc:
+                    self._write_json(500, {"error": "planner_verify_failed", "detail": str(exc)})
+                    return
+                self._write_json(200, verify_result)
+                return
+
+            if path == "/planner/rebuild":
+                settings = self._load_settings()
+                allow_download = bool(payload.get("download_model_if_missing", False))
+                try:
+                    updated = acquire_local_planner_runtime(
+                        settings,
+                        settings_file,
+                        project_root_path,
+                        emit=lambda event: None,
+                        allow_download=allow_download,
+                    )
+                except Exception as exc:
+                    self._write_json(500, {"error": "planner_rebuild_failed", "detail": str(exc)})
+                    return
+                runtime = LocalPlannerRuntime(updated, project_root_path)
+                status_snapshot = collect_setup_status(
+                    manifest_path=manifest_file,
+                    settings_path=settings_file,
+                    project_root=project_root_path,
+                )
+                self._write_json(
+                    200,
+                    {
+                        "ok": bool(status_snapshot.get("planner", {}).get("model_present")),
+                        "planner": status_snapshot.get("planner", {}),
+                        "policy": runtime.policy(),
+                    },
+                )
+                return
+
+            if path == "/planner/policy":
+                planner_patch = {}
+                for key in (
+                    "enabled",
+                    "mode",
+                    "request_timeout_seconds",
+                    "max_repairs_before_fail",
+                    "stronger_model_id",
+                    "escalation_enabled",
+                ):
+                    if key in payload:
+                        planner_patch[key] = payload[key]
+                if planner_patch:
+                    settings = self._save_settings_patch({"planner": planner_patch})
+                else:
+                    settings = self._load_settings()
+                self._write_json(200, build_local_planner_policy(settings, project_root_path))
                 return
 
             if path == "/planner/research/run":
-                try:
-                    research_result = self._planner_client().run_research(payload)
-                    response_payload = dict(research_result) if isinstance(research_result, dict) else {"result": research_result}
-                    try:
-                        policy_after = self._planner_client().get_policy()
-                        response_payload["policy_after"] = policy_after
-                        response_payload["auto_best_ladder_cache"] = self._sync_auto_best_ladder_cache(policy_after)
-                    except PlannerClientError as exc:
-                        response_payload["policy_sync_error"] = str(exc)
-                    self._write_json(200, response_payload)
-                except PlannerClientError as exc:
-                    self._write_json(502, {"error": "planner_unavailable", "detail": str(exc)})
+                self._write_json(
+                    409,
+                    {
+                        "error": "escalation_disabled",
+                        "detail": "Research mode is not part of the Linux-first Falcon baseline yet.",
+                    },
+                )
                 return
 
             if path == "/planner/service/config":
@@ -719,28 +788,82 @@ def make_setup_status_handler(
                     project_root=project_root_path,
                     settings_path=settings_file,
                 )
+                status_snapshot = collect_setup_status(
+                    manifest_path=manifest_file,
+                    settings_path=settings_file,
+                    project_root=project_root_path,
+                )
+                linux_state = status_snapshot.get("linux_workstation", {})
+                runtime_request = {
+                    "profile": payload.get("workflow_profile") or payload.get("profile") or "preview",
+                    "width": payload.get("width"),
+                    "height": payload.get("height"),
+                    "frames": payload.get("frames"),
+                    "fps": payload.get("fps"),
+                    "variant": payload.get("variant") or payload.get("model_variant"),
+                    "low_workstation_impact": payload.get("low_workstation_impact", True),
+                    "weight_streaming": payload.get("weight_streaming"),
+                }
+                linux_runtime_plan = build_linux_runtime_plan(settings, linux_state, runtime_request)
+                helper_payload["linux_workstation"] = {
+                    "role": linux_state.get("role"),
+                    "role_label": linux_state.get("role_label"),
+                    "active_profile": linux_state.get("active_profile"),
+                    "runtime_plan": linux_runtime_plan,
+                    "recommended_config": {
+                        "workflow_profile": linux_runtime_plan.get("effective_profile"),
+                        "model_variant": (linux_runtime_plan.get("selected_model_variant") or {}).get("label"),
+                        "async_offload": (linux_runtime_plan.get("optimizations") or {}).get("async_offload"),
+                        "pinned_memory": (linux_runtime_plan.get("optimizations") or {}).get("pinned_memory"),
+                        "weight_streaming": (linux_runtime_plan.get("optimizations") or {}).get("weight_streaming"),
+                    },
+                }
+                helper_payload["runtime_preferences"] = {
+                    "workflow_profile": linux_runtime_plan.get("effective_profile"),
+                    "model_variant": (linux_runtime_plan.get("selected_model_variant") or {}).get("label"),
+                    "low_workstation_impact": linux_runtime_plan.get("low_workstation_impact"),
+                    "async_offload": (linux_runtime_plan.get("optimizations") or {}).get("async_offload"),
+                    "pinned_memory": (linux_runtime_plan.get("optimizations") or {}).get("pinned_memory"),
+                    "weight_streaming": (linux_runtime_plan.get("optimizations") or {}).get("weight_streaming"),
+                    "nvfp4": False,
+                }
                 workspace_paths = resolve_workspace_paths(settings, project_root_path)
                 prompt = str(helper_payload.get("prompt") or helper_payload.get("request") or "workflow").strip()
                 seen_digests: set[str] = set()
+                planner_runtime = LocalPlannerRuntime(settings, project_root_path)
+                comfy_snapshot = status_snapshot.get("comfyui", {})
+                object_info_payload = None
+                object_info_url = str(comfy_snapshot.get("object_info_url") or "").strip()
+                if object_info_url:
+                    _, object_info_payload = _probe_json_http(object_info_url, timeout=2.0)
 
                 try:
-                    for event in self._planner_client().helper_process_stream(helper_payload):
-                        self._write_ndjson_event(event)
-                        for label, workflow in _extract_workflow_candidates(event):
-                            digest = hashlib.sha256(_canonical_json(workflow).encode("utf-8")).hexdigest()
-                            if digest in seen_digests:
-                                continue
-                            seen_digests.add(digest)
-                            saved = _save_workflow_snapshot(
-                                workflow,
-                                prompt=prompt,
-                                label=label,
-                                generated_dir=workspace_paths["generated_workflows_dir"],
-                                project_root=project_root_path,
-                            )
-                            self._write_ndjson_event({"event": "workflow_saved", **saved})
-                except PlannerClientError as exc:
-                    self._write_ndjson_event({"event": "error", "message": str(exc)})
+                    self._write_ndjson_event({"event": "linux_runtime_plan", **linux_runtime_plan})
+                    for warning in linux_runtime_plan.get("warnings", []):
+                        self._write_ndjson_event({"event": "warning", "message": warning, "scope": "linux_runtime_plan"})
+                    plan_result = planner_runtime.plan(
+                        helper_payload,
+                        object_info_payload=object_info_payload,
+                        comfy_base_url=str(comfy_snapshot.get("base_url") or "").strip() or None,
+                        emit=self._write_ndjson_event,
+                    )
+                    for label, workflow in _extract_workflow_candidates(plan_result):
+                        digest = hashlib.sha256(_canonical_json(workflow).encode("utf-8")).hexdigest()
+                        if digest in seen_digests:
+                            continue
+                        seen_digests.add(digest)
+                        saved = _save_workflow_snapshot(
+                            workflow,
+                            prompt=prompt,
+                            label=label,
+                            generated_dir=workspace_paths["generated_workflows_dir"],
+                            project_root=project_root_path,
+                        )
+                        self._write_ndjson_event({"event": "workflow_saved", **saved})
+                except LocalPlannerError as exc:
+                    self._write_ndjson_event({"type": "error", "event": "error", "data": {"message": str(exc)}})
+                except Exception as exc:
+                    self._write_ndjson_event({"type": "error", "event": "error", "data": {"message": str(exc)}})
                 return
 
             self._write_json(404, {"error": "not_found", "path": path})
@@ -826,6 +949,7 @@ def main(argv: list[str] | None = None) -> int:
         f"http://{args.host}:{server.server_port}/setup/status, "
         f"http://{args.host}:{server.server_port}/setup/acquire, "
         f"http://{args.host}:{server.server_port}/setup/verify, "
+        f"http://{args.host}:{server.server_port}/setup/benchmark, "
         f"http://{args.host}:{server.server_port}/ports/status, "
         f"http://{args.host}:{server.server_port}/health"
     )

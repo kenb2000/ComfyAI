@@ -9,13 +9,49 @@
   </head>
   <body>
     <main class="shell">
-      <section class="panel">
-        <div class="eyebrow">ComfyAI desktop shell</div>
-        <h1>Starting ComfyUI</h1>
-        <p id="status" class="status">Preparing the local runtime and waiting for the editor to respond.</p>
-        <div class="spinner" aria-hidden="true"></div>
-        <pre id="details" class="details">Shell boot has started.</pre>
-        <button id="retry" class="retry hidden" type="button">Retry launch</button>
+      <section class="panel hero">
+        <div class="eyebrow">ComfyAI Linux workstation</div>
+        <h1>Stable local generation and fallback node</h1>
+        <p id="status" class="status">Loading workstation status, Linux capability policy, and recommended local runtime settings.</p>
+        <div class="actions">
+          <button id="launch" type="button">Launch ComfyUI</button>
+          <button id="openEditor" class="secondary" type="button" disabled>Open Editor</button>
+          <button id="verify" class="secondary" type="button">Run Verify</button>
+          <button id="benchmark" class="secondary" type="button">Run Benchmark</button>
+          <button id="refresh" class="secondary" type="button">Refresh</button>
+        </div>
+        <pre id="details" class="details">Dashboard boot has started.</pre>
+      </section>
+
+      <section class="grid">
+        <section class="panel">
+          <div class="eyebrow">Role</div>
+          <h2 id="roleTitle">Linux workstation</h2>
+          <p id="roleSummary" class="status">Waiting for Linux workstation policy.</p>
+          <ul id="capabilityList" class="capability-list">
+            <li>Loading capabilities...</li>
+          </ul>
+        </section>
+
+        <section class="panel">
+          <div class="eyebrow">Recommended config</div>
+          <h2>Workstation-safe defaults</h2>
+          <pre id="recommendation" class="details">Loading recommendation...</pre>
+        </section>
+      </section>
+
+      <section class="grid lower-grid">
+        <section class="panel">
+          <div class="eyebrow">Verify</div>
+          <h2>Latest verify result</h2>
+          <pre id="verifyOutput" class="details">No verify run yet.</pre>
+        </section>
+
+        <section class="panel">
+          <div class="eyebrow">Benchmark</div>
+          <h2>Latest benchmark result</h2>
+          <pre id="benchmarkOutput" class="details">No benchmark run yet.</pre>
+        </section>
       </section>
     </main>
   </body>

@@ -24,6 +24,38 @@ class _JsonHandler(BaseHTTPRequestHandler):
         return
 
 
+class _ComfyStatusHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        if self.path == "/system_stats":
+            body = json.dumps({"ok": True}).encode("utf-8")
+            self.send_response(200)
+        elif self.path == "/object_info":
+            body = json.dumps(
+                {
+                    "CheckpointLoaderSimple": {},
+                    "CLIPTextEncode": {},
+                    "EmptyLatentImage": {},
+                    "KSamplerAdvanced": {},
+                    "VAEDecode": {},
+                    "SaveImage": {},
+                    "LTXVideoSampler": {"input": {}},
+                    "AsyncOffload": {},
+                    "PinnedMemory": {},
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+        else:
+            body = b"{}"
+            self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):  # noqa: A003
+        return
+
+
 class TestSetupStatus(unittest.TestCase):
     def _start_server(self, handler):
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -82,11 +114,20 @@ class TestSetupStatus(unittest.TestCase):
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         return manifest_path
 
+    def _write_fake_planner_model(self, root: Path) -> Path:
+        model_dir = root / "shared-models" / "Falcon3-10B-Instruct-1.58bit"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
+        (model_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+        (model_dir / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+        (model_dir / "model.safetensors").write_bytes(b"12345678")
+        return model_dir
+
     def test_collect_setup_status_reports_runtime_planner_and_models(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
 
-            comfy_server, comfy_thread = self._start_server(_JsonHandler)
+            comfy_server, comfy_thread = self._start_server(_ComfyStatusHandler)
             planner_server, planner_thread = self._start_server(_JsonHandler)
             self.addCleanup(self._stop_server, comfy_server, comfy_thread)
             self.addCleanup(self._stop_server, planner_server, planner_thread)
@@ -96,6 +137,7 @@ class TestSetupStatus(unittest.TestCase):
                 f"http://127.0.0.1:{planner_server.server_port}",
                 comfy_server.server_port,
             )
+            planner_model = self._write_fake_planner_model(root)
 
             (root / "assistant_repo").mkdir(parents=True, exist_ok=True)
             (root / "downloads").mkdir(parents=True, exist_ok=True)
@@ -103,8 +145,10 @@ class TestSetupStatus(unittest.TestCase):
 
             (root / "comfyui" / "models" / "checkpoints").mkdir(parents=True, exist_ok=True)
             (root / "comfyui" / "models" / "controlnet").mkdir(parents=True, exist_ok=True)
+            (root / "comfyui" / "custom_nodes" / "ComfyUI-LTXVideo").mkdir(parents=True, exist_ok=True)
             (root / "comfyui" / "main.py").write_text("print('comfy')\n", encoding="utf-8")
             (root / "comfyui" / "models" / "checkpoints" / "sdxl_base.safetensors").write_bytes(b"12345678")
+            (root / "comfyui" / "models" / "checkpoints" / "ltx-2.3-fp8.safetensors").write_bytes(b"12345678")
 
             python_exe = root / ".venv" / "Scripts" / "python.exe"
             python_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +158,9 @@ class TestSetupStatus(unittest.TestCase):
                 default_settings(project_root=root, manifest_path=manifest_path),
                 {
                     "tool_paths": {"venv_dir": ".venv"},
+                    "planner": {
+                        "shared_storage_candidates": [str(planner_model)],
+                    },
                 },
             )
             save_settings(settings, root / "settings.json")
@@ -123,11 +170,19 @@ class TestSetupStatus(unittest.TestCase):
             self.assertTrue(status["comfyui"]["installed"])
             self.assertTrue(status["comfyui"]["runnable"])
             self.assertTrue(status["comfyui"]["reachable"])
-            self.assertTrue(status["planner"]["reachable"])
-            self.assertTrue(status["planner"]["assistant_repo_exists"])
+            self.assertTrue(status["planner"]["model_present"])
+            self.assertEqual(status["planner"]["mode"], "local")
+            self.assertTrue(status["planner"]["ready"])
+            self.assertTrue(status["planner"]["assistant_service"]["reachable"])
+            self.assertTrue(status["planner"]["assistant_service"]["assistant_repo_exists"])
             self.assertFalse(status["comfyui"]["port_status"]["conflict"])
-            self.assertFalse(status["planner"]["port_status"]["conflict"])
+            self.assertFalse(status["planner"]["assistant_service"]["port_status"]["conflict"])
             self.assertIn("ports", status)
+            self.assertIn("linux_workstation", status)
+            self.assertEqual(status["linux_workstation"]["active_profile"], "linux_stable_nvidia")
+            self.assertTrue(status["linux_workstation"]["capabilities"]["ltx_video_node_available"])
+            self.assertTrue(status["linux_workstation"]["capabilities"]["fp8_capable_checkpoints_available"])
+            self.assertFalse(status["linux_workstation"]["capabilities"]["nvfp4_supported"])
 
             models = {item["model_name"]: item for item in status["optional_models"]["items"]}
             self.assertEqual(models["sdxl_base.safetensors"]["status"], "present")
@@ -139,7 +194,7 @@ class TestSetupStatus(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
 
-            comfy_server, comfy_thread = self._start_server(_JsonHandler)
+            comfy_server, comfy_thread = self._start_server(_ComfyStatusHandler)
             planner_server, planner_thread = self._start_server(_JsonHandler)
             self.addCleanup(self._stop_server, comfy_server, comfy_thread)
             self.addCleanup(self._stop_server, planner_server, planner_thread)
@@ -149,6 +204,7 @@ class TestSetupStatus(unittest.TestCase):
                 f"http://127.0.0.1:{planner_server.server_port}",
                 comfy_server.server_port,
             )
+            planner_model = self._write_fake_planner_model(root)
 
             (root / "comfyui" / "models" / "checkpoints").mkdir(parents=True, exist_ok=True)
             (root / "comfyui" / "main.py").write_text("print('comfy')\n", encoding="utf-8")
@@ -160,6 +216,9 @@ class TestSetupStatus(unittest.TestCase):
                 default_settings(project_root=root, manifest_path=manifest_path),
                 {
                     "tool_paths": {"venv_dir": ".venv"},
+                    "planner": {
+                        "shared_storage_candidates": [str(planner_model)],
+                    },
                 },
             )
             save_settings(settings, root / "settings.json")
@@ -179,8 +238,9 @@ class TestSetupStatus(unittest.TestCase):
             self.assertIn("comfyui", data)
             self.assertIn("planner", data)
             self.assertIn("optional_models", data)
+            self.assertIn("linux_workstation", data)
             self.assertIn("port_status", data["comfyui"])
-            self.assertIn("port_status", data["planner"])
+            self.assertIn("assistant_service", data["planner"])
             self.assertIn("ports", data)
 
 

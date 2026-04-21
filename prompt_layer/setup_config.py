@@ -7,6 +7,9 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .linux_workstation import default_linux_workstation_settings
+from .planner.config import default_local_planner_settings
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST_PATH = PROJECT_ROOT / "requirements" / "comfyhybrid_requirements.json"
@@ -102,6 +105,13 @@ def _backfill_legacy_settings(merged: dict[str, Any], defaults: dict[str, Any]) 
         planner["can_launch_as_sidecar"] = bool(default_planner.get("can_launch_as_sidecar", True))
     if legacy_blank_launcher or "enabled" not in launch:
         launch["enabled"] = bool(default_launch.get("enabled", True))
+    for key, value in default_planner.items():
+        if key in {"auto_best_ladder_cache", "sidecar_launch", "health_endpoint", "can_launch_as_sidecar"}:
+            continue
+        if isinstance(value, dict):
+            planner[key] = deep_merge(value, planner.get(key, {}))
+        else:
+            planner.setdefault(key, deepcopy(value))
 
     return merged
 
@@ -115,6 +125,7 @@ def default_settings(
     manifest = load_requirements_manifest(manifest_file)
     comfy_config = manifest.get("comfyui_runtime", {})
     planner_config = manifest.get("planner_service", {})
+    local_planner_config = manifest.get("local_planner", {})
     venv_policy = comfy_config.get("venv_path_policy", {})
     venv_mode = str(venv_policy.get("mode", "tool_folder")).strip() or "tool_folder"
 
@@ -130,6 +141,7 @@ def default_settings(
             project_root_path,
             venv_policy.get("tool_folder_relative_path", "tools/comfyhybrid-venv"),
         ) or (tool_base / "comfyhybrid-venv")
+    planner_defaults = deep_merge(default_local_planner_settings(project_root_path), local_planner_config)
     defaults = {
         "schema_version": 1,
         "manifest_path": _serialize_path(project_root_path, manifest_file),
@@ -166,7 +178,12 @@ def default_settings(
             "log_path": _serialize_path(project_root_path, runtime_dir / "planner.log"),
             "pid_path": _serialize_path(project_root_path, runtime_dir / "planner.pid"),
             "sidecar_launch": _default_planner_sidecar_config(),
+            **planner_defaults,
         },
+        "linux_workstation": deep_merge(
+            default_linux_workstation_settings(project_root_path),
+            manifest.get("linux_workstation", {}),
+        ),
     }
     return defaults
 

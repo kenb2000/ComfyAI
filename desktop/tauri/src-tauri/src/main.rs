@@ -2,6 +2,7 @@
 
 use reqwest::blocking::Client as BlockingClient;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 #[cfg(windows)]
@@ -365,6 +366,52 @@ fn launch_shell_blocking(state: &ShellState) -> Result<LaunchResponse, String> {
     wait_until_ready_blocking(state, launch_url, health, false)
 }
 
+fn run_setup_flow_json(mode: &str) -> Result<Value, String> {
+    let root = repo_root();
+    let settings = load_settings(&root)?;
+    let python = resolve_shell_python(&root, &settings);
+    if !python.exists() {
+        return Err(format!(
+            "Python executable not found at {}. Configure settings.json or create the repo .venv first.",
+            python.display()
+        ));
+    }
+
+    let script = root.join("scripts").join("comfyhybrid_setup_flow.py");
+    if !script.exists() {
+        return Err(format!("Setup flow script not found at {}.", script.display()));
+    }
+
+    let output = Command::new(python)
+        .arg(script)
+        .arg(mode)
+        .arg("--json")
+        .current_dir(&root)
+        .env("PYTHONUNBUFFERED", "1")
+        .output()
+        .map_err(|err| format!("failed to run setup flow for {mode}: {err}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stdout.is_empty() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&stdout) {
+            return Ok(parsed);
+        }
+    }
+
+    if output.status.success() {
+        return Err(format!("setup flow {mode} did not return JSON output"));
+    }
+
+    Err(if stderr.is_empty() {
+        stdout
+    } else if stdout.is_empty() {
+        stderr
+    } else {
+        format!("{}\n{}", stdout, stderr)
+    })
+}
+
 #[tauri::command]
 async fn launch_comfyui_shell(app_handle: AppHandle) -> Result<LaunchResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -373,6 +420,27 @@ async fn launch_comfyui_shell(app_handle: AppHandle) -> Result<LaunchResponse, S
     })
     .await
     .map_err(|err| format!("failed to join ComfyUI launch task: {err}"))?
+}
+
+#[tauri::command]
+async fn get_workstation_status() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| run_setup_flow_json("status"))
+        .await
+        .map_err(|err| format!("failed to join workstation status task: {err}"))?
+}
+
+#[tauri::command]
+async fn verify_workstation() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| run_setup_flow_json("verify"))
+        .await
+        .map_err(|err| format!("failed to join workstation verify task: {err}"))?
+}
+
+#[tauri::command]
+async fn benchmark_workstation() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| run_setup_flow_json("benchmark"))
+        .await
+        .map_err(|err| format!("failed to join workstation benchmark task: {err}"))?
 }
 
 fn js_string(value: &str) -> String {
@@ -449,15 +517,13 @@ fn main() {
     append_shell_log("main entered");
     let app = tauri::Builder::default()
         .manage(ShellState::default())
-        .invoke_handler(tauri::generate_handler![launch_comfyui_shell])
-        .setup(|app| {
-            append_shell_log("setup entered");
-            let window = app
-                .get_webview_window("main")
-                .ok_or_else(|| "main window not found".to_string())?;
-            bootstrap_shell(window, app.handle().clone());
-            Ok(())
-        })
+        .invoke_handler(tauri::generate_handler![
+            launch_comfyui_shell,
+            get_workstation_status,
+            verify_workstation,
+            benchmark_workstation
+        ])
+        .setup(|_| Ok(()))
         .build(tauri::generate_context!())
         .expect("error while building ComfyAI Tauri shell");
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import signal
 import socket
 import shutil
@@ -25,6 +26,21 @@ from .ports import (
     resolve_base_url,
     resolve_registered_port,
     write_local_port_state,
+)
+from .linux_workstation import (
+    build_linux_benchmark,
+    build_linux_runtime_plan,
+    detect_linux_workstation_capabilities,
+    scan_ltx_node_state,
+)
+from .planner import LocalPlannerRuntime
+from .planner.config import (
+    build_local_planner_policy,
+    build_local_planner_status,
+    resolve_local_planner_model_path,
+    resolve_planner_output_dir,
+    write_local_planner_policy,
+    write_local_planner_status,
 )
 from .setup_config import (
     DEFAULT_MANIFEST_PATH,
@@ -81,6 +97,96 @@ def _probe_http(url: str, timeout: float = 2.0) -> dict[str, Any]:
             "status_code": None,
             "detail": str(exc),
         }
+
+
+def _probe_json_http(url: str, timeout: float = 2.0) -> tuple[dict[str, Any], Any | None]:
+    try:
+        with request.urlopen(url, timeout=timeout) as response:
+            status_code = response.getcode()
+            body = response.read().decode("utf-8", errors="replace")
+        payload = json.loads(body) if body.strip() else None
+        return (
+            {
+                "reachable": True,
+                "ok": 200 <= status_code < 300,
+                "status_code": status_code,
+                "detail": "ok",
+            },
+            payload,
+        )
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        parsed: Any | None = None
+        if detail.strip():
+            try:
+                parsed = json.loads(detail)
+            except json.JSONDecodeError:
+                parsed = None
+        return (
+            {
+                "reachable": True,
+                "ok": False,
+                "status_code": exc.code,
+                "detail": str(exc),
+            },
+            parsed,
+        )
+    except Exception as exc:
+        return (
+            {
+                "reachable": False,
+                "ok": False,
+                "status_code": None,
+                "detail": str(exc),
+            },
+            None,
+        )
+
+
+def _post_json_http(url: str, payload: dict[str, Any], timeout: float = 5.0) -> tuple[dict[str, Any], Any | None]:
+    body = json.dumps(payload).encode("utf-8")
+    req = request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            status_code = response.getcode()
+            data = response.read().decode("utf-8", errors="replace")
+        parsed = json.loads(data) if data.strip() else None
+        return (
+            {
+                "reachable": True,
+                "ok": 200 <= status_code < 300,
+                "status_code": status_code,
+                "detail": "ok",
+            },
+            parsed,
+        )
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        parsed: Any | None = None
+        if detail.strip():
+            try:
+                parsed = json.loads(detail)
+            except json.JSONDecodeError:
+                parsed = None
+        return (
+            {
+                "reachable": True,
+                "ok": False,
+                "status_code": exc.code,
+                "detail": str(exc),
+            },
+            parsed,
+        )
+    except Exception as exc:
+        return (
+            {
+                "reachable": False,
+                "ok": False,
+                "status_code": None,
+                "detail": str(exc),
+            },
+            None,
+        )
 
 
 def _normalize_connect_host(host: str) -> str:
@@ -274,6 +380,140 @@ def _tail_text(value: str, max_chars: int = 1200) -> str:
     return text[-max_chars:]
 
 
+def _read_text_tail(path: Path, max_chars: int = 4000) -> str | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    stripped = text.strip()
+    if not stripped:
+        return None
+    return _tail_text(stripped, max_chars=max_chars)
+
+
+def _parse_version_tuple(value: str | None) -> tuple[int, ...]:
+    parsed: list[int] = []
+    for token in str(value or "").replace("-", ".").split("."):
+        digits = "".join(character for character in token if character.isdigit())
+        if not digits:
+            continue
+        parsed.append(int(digits))
+    return tuple(parsed)
+
+
+def _version_at_least(actual: tuple[int, ...], expected: tuple[int, ...]) -> bool:
+    if not actual:
+        return False
+    padded = actual + (0,) * max(0, len(expected) - len(actual))
+    return padded[: len(expected)] >= expected
+
+
+def _inspect_installed_torch_versions(python_executable: Path) -> dict[str, Any]:
+    script = (
+        "import importlib, json\n"
+        "result = {}\n"
+        "for name in ('torch', 'torchvision', 'torchaudio'):\n"
+        "    try:\n"
+        "        module = importlib.import_module(name)\n"
+        "        result[name] = {'version': getattr(module, '__version__', None), 'ok': True}\n"
+        "    except Exception as exc:\n"
+        "        result[name] = {'version': None, 'ok': False, 'detail': str(exc)}\n"
+        "print(json.dumps(result))\n"
+    )
+    result = run_command([str(python_executable), "-c", script], timeout=20)
+    if result.returncode != 0:
+        return {}
+    try:
+        payload = json.loads((result.stdout or "").strip() or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _torch_versions_match_channel(installed: dict[str, Any], channel: str) -> bool:
+    expected_suffix = f"+{channel}"
+    for package_name in ("torch", "torchvision", "torchaudio"):
+        entry = installed.get(package_name)
+        if not isinstance(entry, dict):
+            return False
+        version = str(entry.get("version") or "").strip()
+        if expected_suffix not in version:
+            return False
+    return True
+
+
+def _select_linux_nvidia_torch_channel(driver_version: str | None) -> dict[str, Any]:
+    parsed_driver = _parse_version_tuple(driver_version)
+    if _version_at_least(parsed_driver, (580, 0)):
+        channel = "cu130"
+        reason = "nvidia_driver_580_or_newer"
+    elif _version_at_least(parsed_driver, (550, 0)):
+        channel = "cu124"
+        reason = "nvidia_driver_550_or_newer"
+    else:
+        channel = "cu121"
+        reason = "conservative_nvidia_driver_fallback"
+    return {
+        "driver_version": str(driver_version or "").strip() or None,
+        "channel": channel,
+        "index_url": f"https://download.pytorch.org/whl/{channel}",
+        "reason": reason,
+    }
+
+
+def _build_linux_nvidia_torch_install_command(
+    settings: dict[str, Any],
+    project_root: Path,
+    python_executable: Path,
+) -> dict[str, Any] | None:
+    if platform.system().lower() != "linux":
+        return None
+
+    comfy_root = resolve_comfy_repo_path(settings, project_root)
+    capabilities = detect_linux_workstation_capabilities(settings, project_root, comfy_root)
+    nvidia = capabilities.get("nvidia_gpu", {})
+    if not bool(nvidia.get("present")):
+        return None
+
+    selection = _select_linux_nvidia_torch_channel(nvidia.get("driver_version"))
+    installed = _inspect_installed_torch_versions(python_executable)
+    if _torch_versions_match_channel(installed, str(selection["channel"])):
+        return None
+
+    return {
+        "label": "install_linux_nvidia_torch",
+        "command": [
+            str(python_executable),
+            "-m",
+            "pip",
+            "install",
+            "--force-reinstall",
+            "--index-url",
+            str(selection["index_url"]),
+            "torch",
+            "torchvision",
+            "torchaudio",
+        ],
+        "selection": selection,
+        "installed_versions": installed,
+    }
+
+
+def _diagnose_comfyui_log(log_tail: str | None) -> str | None:
+    normalized = str(log_tail or "").lower()
+    if not normalized:
+        return None
+    if "the nvidia driver on your system is too old" in normalized or (
+        "cuda initialization" in normalized and "driver" in normalized
+    ):
+        return "Detected a PyTorch CUDA wheel that is newer than the installed NVIDIA driver. Reinstall a driver-compatible torch channel or update the NVIDIA driver."
+    if "torch not compiled with cuda enabled" in normalized:
+        return "Detected a non-CUDA PyTorch build in the ComfyUI venv. Install an NVIDIA CUDA wheel set before launching ComfyUI."
+    return None
+
+
 def run_command(
     command: list[str],
     cwd: Path | None = None,
@@ -439,7 +679,7 @@ def acquire_comfyui_repo(settings: dict[str, Any], project_root: Path, emit: Pro
 
     emit(make_progress_event("step", step="acquire_comfyui", status="started", repo_path=str(comfy_root.resolve()), repo_source=source))
 
-    if is_submodule:
+    if is_submodule and _is_git_repo(project_root):
         result = run_command(["git", "-C", str(project_root), "submodule", "update", "--init", "--recursive", "--", relative_path])
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Failed to initialize ComfyUI submodule")
@@ -464,7 +704,10 @@ def acquire_comfyui_repo(settings: dict[str, Any], project_root: Path, emit: Pro
         return comfy_root
 
     if comfy_root.exists() and not main_py.exists():
-        raise RuntimeError(f"Configured ComfyUI path exists but is not a runnable ComfyUI checkout: {comfy_root}")
+        if comfy_root.is_dir() and not any(comfy_root.iterdir()):
+            comfy_root.rmdir()
+        else:
+            raise RuntimeError(f"Configured ComfyUI path exists but is not a runnable ComfyUI checkout: {comfy_root}")
 
     if not source:
         raise RuntimeError("No ComfyUI repo source configured in settings.")
@@ -493,22 +736,48 @@ def create_venv_and_install_requirements(settings: dict[str, Any], project_root:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Failed to create venv")
         python_executable = resolve_python_executable(settings, project_root)
 
-    install_plan: list[tuple[str, list[str]]] = [
-        ("upgrade_pip", [str(python_executable), "-m", "pip", "install", "--upgrade", "pip"]),
-        ("install_repo_requirements", [str(python_executable), "-m", "pip", "install", "-r", str(project_root / "requirements.txt")]),
-        ("install_editable_repo", [str(python_executable), "-m", "pip", "install", "-e", str(project_root)]),
+    install_plan: list[dict[str, Any]] = [
+        {
+            "label": "upgrade_pip",
+            "command": [str(python_executable), "-m", "pip", "install", "--upgrade", "pip"],
+        },
+        {
+            "label": "install_repo_requirements",
+            "command": [str(python_executable), "-m", "pip", "install", "-r", str(project_root / "requirements.txt")],
+        },
+        {
+            "label": "install_editable_repo",
+            "command": [str(python_executable), "-m", "pip", "install", "-e", str(project_root)],
+        },
     ]
+
+    nvidia_torch_install = _build_linux_nvidia_torch_install_command(settings, project_root, python_executable)
+    if nvidia_torch_install is not None:
+        install_plan.insert(1, nvidia_torch_install)
 
     comfy_root = resolve_comfy_repo_path(settings, project_root)
     comfy_requirements = comfy_root / "requirements.txt"
     manager_requirements = comfy_root / "manager_requirements.txt"
     if comfy_requirements.exists():
-        install_plan.append(("install_comfyui_requirements", [str(python_executable), "-m", "pip", "install", "-r", str(comfy_requirements)]))
+        install_plan.append(
+            {
+                "label": "install_comfyui_requirements",
+                "command": [str(python_executable), "-m", "pip", "install", "-r", str(comfy_requirements)],
+            }
+        )
     if manager_requirements.exists():
-        install_plan.append(("install_comfyui_manager_requirements", [str(python_executable), "-m", "pip", "install", "-r", str(manager_requirements)]))
+        install_plan.append(
+            {
+                "label": "install_comfyui_manager_requirements",
+                "command": [str(python_executable), "-m", "pip", "install", "-r", str(manager_requirements)],
+            }
+        )
 
-    for label, command in install_plan:
-        emit(make_progress_event("step", step="create_venv", status="running", command=command, label=label))
+    for item in install_plan:
+        label = str(item["label"])
+        command = list(item["command"])
+        extra_payload = {key: value for key, value in item.items() if key not in {"label", "command"}}
+        emit(make_progress_event("step", step="create_venv", status="running", command=command, label=label, **extra_payload))
         result = run_command(command, cwd=project_root)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"{label} failed")
@@ -599,6 +868,327 @@ def acquire_optional_models(settings: dict[str, Any], project_root: Path, emit: 
 
     emit(make_progress_event("step", step="acquire_optional_models", status="completed", counts=counts))
     return counts
+
+
+def _linux_artifact_paths(settings: dict[str, Any], project_root: Path) -> dict[str, Path]:
+    linux_settings = settings.get("linux_workstation", {})
+    artifacts = linux_settings.get("artifacts", {})
+    runtime_root = resolve_tool_paths(settings, project_root)["runtime_dir"]
+    verification_dir = resolve_path(project_root, artifacts.get("verification_dir")) or (runtime_root / "verification" / "linux")
+    benchmark_dir = resolve_path(project_root, artifacts.get("benchmark_dir")) or (runtime_root / "benchmarks" / "linux")
+    latest_verification = resolve_path(project_root, artifacts.get("latest_verification")) or (verification_dir / "latest.json")
+    latest_benchmark = resolve_path(project_root, artifacts.get("latest_benchmark")) or (benchmark_dir / "latest.json")
+    return {
+        "verification_dir": verification_dir,
+        "benchmark_dir": benchmark_dir,
+        "latest_verification": latest_verification,
+        "latest_benchmark": latest_benchmark,
+    }
+
+
+def _write_json_artifact(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _persist_linux_artifact(
+    settings: dict[str, Any],
+    project_root: Path,
+    kind: str,
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    paths = _linux_artifact_paths(settings, project_root)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if kind == "benchmark":
+        artifact_dir = paths["benchmark_dir"]
+        latest_path = paths["latest_benchmark"]
+    else:
+        artifact_dir = paths["verification_dir"]
+        latest_path = paths["latest_verification"]
+    artifact_path = artifact_dir / f"{kind}-{timestamp}.json"
+    _write_json_artifact(artifact_path, payload)
+    _write_json_artifact(latest_path, payload)
+    return {
+        "artifact_path": str(artifact_path.resolve()),
+        "latest_path": str(latest_path.resolve()),
+    }
+
+
+def acquire_linux_workstation_assets(
+    settings: dict[str, Any],
+    project_root: Path,
+    emit: ProgressEmitter,
+    *,
+    acquire_all_checkpoints: bool = False,
+) -> dict[str, Any]:
+    linux_settings = settings.get("linux_workstation", {})
+    if os.name == "nt" or not linux_settings.get("enabled", True):
+        emit(make_progress_event("step", step="acquire_linux_workstation_assets", status="skipped", reason="not_linux"))
+        return {"skipped": True, "reason": "not_linux"}
+
+    manifest = load_requirements_manifest(resolve_path(project_root, settings.get("manifest_path")) or DEFAULT_MANIFEST_PATH)
+    linux_manifest = manifest.get("linux_workstation", {})
+    comfy_root = resolve_comfy_repo_path(settings, project_root)
+    models_root = comfy_root / "models"
+    node_state = scan_ltx_node_state(settings, project_root, comfy_root)
+    node_source_kind, node_source_value = _parse_model_source(dict(linux_manifest.get("ltx_nodes", {}).get("source", {})))
+
+    emit(
+        make_progress_event(
+            "step",
+            step="acquire_linux_workstation_assets",
+            status="started",
+            active_profile=linux_settings.get("active_profile", "linux_stable_nvidia"),
+        )
+    )
+
+    if not node_state.get("available") and node_source_kind == "git_url" and node_source_value:
+        candidates = node_state.get("candidates", [])
+        target = Path(candidates[0]["absolute_path"]) if candidates else (comfy_root / "custom_nodes" / "ComfyUI-LTXVideo")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and _is_git_repo(target):
+            result = run_command(["git", "-C", str(target), "pull", "--ff-only", "origin", "main"])
+            if result.returncode != 0:
+                emit(
+                    make_progress_event(
+                        "step",
+                        step="acquire_linux_workstation_assets",
+                        status="warning",
+                        message="Configured LTXVideo node path exists but could not be updated.",
+                        stderr_tail=_tail_text(result.stderr),
+                    )
+                )
+            else:
+                emit(make_progress_event("step", step="acquire_linux_workstation_assets", status="running", message="Updated LTXVideo node checkout."))
+        elif not target.exists():
+            result = run_command(["git", "clone", node_source_value, str(target)], cwd=project_root)
+            if result.returncode != 0:
+                emit(
+                    make_progress_event(
+                        "step",
+                        step="acquire_linux_workstation_assets",
+                        status="warning",
+                        message="Failed to clone configured LTXVideo node source.",
+                        stderr_tail=_tail_text(result.stderr),
+                    )
+                )
+            else:
+                emit(make_progress_event("step", step="acquire_linux_workstation_assets", status="running", message="Cloned configured LTXVideo node source."))
+        node_state = scan_ltx_node_state(settings, project_root, comfy_root)
+
+    node_install_status: dict[str, Any] | None = None
+    if node_state.get("available"):
+        available_node = next(
+            (Path(item["absolute_path"]) for item in node_state.get("candidates", []) if item.get("exists")),
+            None,
+        )
+        node_requirements = (available_node / "requirements.txt") if available_node is not None else None
+        python_executable = resolve_python_executable(settings, project_root)
+        if node_requirements is not None and node_requirements.exists():
+            if not python_executable.exists():
+                node_install_status = {
+                    "status": "skipped",
+                    "reason": "python_executable_missing",
+                    "requirements_path": str(node_requirements.resolve()),
+                }
+                emit(
+                    make_progress_event(
+                        "step",
+                        step="acquire_linux_workstation_assets",
+                        status="warning",
+                        message="Skipping LTXVideo node requirements because the configured Python executable does not exist yet.",
+                        requirements_path=str(node_requirements.resolve()),
+                    )
+                )
+            else:
+                emit(
+                    make_progress_event(
+                        "step",
+                        step="acquire_linux_workstation_assets",
+                        status="running",
+                        message="Installing LTXVideo node requirements.",
+                        requirements_path=str(node_requirements.resolve()),
+                    )
+                )
+                result = run_command(
+                    [str(python_executable), "-m", "pip", "install", "-r", str(node_requirements)],
+                    cwd=available_node,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Failed to install LTXVideo node requirements")
+                node_install_status = {
+                    "status": "installed",
+                    "requirements_path": str(node_requirements.resolve()),
+                }
+
+    checkpoint_counts = {"present": 0, "copied": 0, "downloaded": 0, "skipped": 0}
+    for item in linux_manifest.get("preferred_checkpoints", []):
+        model_name = str(item.get("model_name", "linux_workstation_model"))
+        if not acquire_all_checkpoints and not bool(item.get("acquire_by_default", True)):
+            checkpoint_counts["skipped"] += 1
+            emit(
+                make_progress_event(
+                    "model",
+                    step="acquire_linux_workstation_assets",
+                    status="skipped",
+                    model_name=model_name,
+                    reason="deferred_optional_variant",
+                )
+            )
+            continue
+        size_min = int(item.get("expected_size_min_bytes", 0))
+        expected_sha256 = item.get("sha256")
+        target_path = models_root / Path(item["target_path_relative_to_models"])
+        valid, _ = _validate_model_file(target_path, size_min, expected_sha256)
+        if valid:
+            checkpoint_counts["present"] += 1
+            continue
+
+        source_kind, source_value = _parse_model_source(item)
+        if source_kind == "local_path" and source_value:
+            source_path = resolve_path(project_root, source_value)
+            if source_path is not None and source_path.exists():
+                _copy_local_model(source_path, target_path)
+                checkpoint_counts["copied"] += 1
+                emit(make_progress_event("model", step="acquire_linux_workstation_assets", status="copied", model_name=model_name))
+            else:
+                checkpoint_counts["skipped"] += 1
+                emit(make_progress_event("model", step="acquire_linux_workstation_assets", status="skipped", model_name=model_name, reason="source_missing"))
+        elif source_kind == "http_url" and source_value:
+            _download_model(source_value, target_path, emit, model_name)
+            checkpoint_counts["downloaded"] += 1
+            emit(make_progress_event("model", step="acquire_linux_workstation_assets", status="downloaded", model_name=model_name))
+        else:
+            checkpoint_counts["skipped"] += 1
+
+    result = {
+        "ltx_nodes": node_state,
+        "ltx_node_requirements": node_install_status,
+        "preferred_checkpoints": checkpoint_counts,
+    }
+    emit(make_progress_event("step", step="acquire_linux_workstation_assets", status="completed", result=result))
+    return result
+
+
+def _time_probe(url: str, timeout: float = 2.0, json_payload: bool = False) -> tuple[dict[str, Any], Any | None, float]:
+    started = time.perf_counter()
+    if json_payload:
+        probe, payload = _probe_json_http(url, timeout=timeout)
+    else:
+        probe = _probe_http(url, timeout=timeout)
+        payload = None
+    elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
+    return probe, payload, elapsed_ms
+
+
+def _collect_linux_verification(
+    settings: dict[str, Any],
+    project_root: Path,
+    object_info_payload: Any | None,
+    request_payload: dict[str, Any],
+    emit: ProgressEmitter,
+) -> dict[str, Any]:
+    comfy_root = resolve_comfy_repo_path(settings, project_root)
+    capabilities = detect_linux_workstation_capabilities(settings, project_root, comfy_root, object_info_payload=object_info_payload)
+    if not capabilities.get("running_on_linux", False):
+        return {
+            "enabled": False,
+            "role": capabilities.get("role"),
+            "role_label": capabilities.get("role_label"),
+            "active_profile": capabilities.get("active_profile"),
+            "capabilities": capabilities,
+            "workflows": {},
+            "recommended_config": None,
+            "artifact_paths": None,
+        }
+
+    preview_request = dict(request_payload.get("preview_workflow", {}))
+    preview_request.setdefault("profile", "preview")
+    preview_request.setdefault("low_workstation_impact", True)
+    preview_plan = build_linux_runtime_plan(settings, capabilities, preview_request)
+
+    fallback_request = dict(request_payload.get("fallback_workflow", {}))
+    fallback_request.setdefault("profile", fallback_request.get("workflow_profile") or "quality")
+    fallback_request.setdefault("low_workstation_impact", True)
+    fallback_plan = build_linux_runtime_plan(settings, capabilities, fallback_request)
+
+    for workflow_name, plan in (("preview", preview_plan), ("fallback", fallback_plan)):
+        for warning in plan.get("warnings", []):
+            emit(make_progress_event("warning", action="setup_verify", workflow=workflow_name, message=warning))
+
+    verification = {
+        "enabled": capabilities.get("enabled", False),
+        "role": capabilities.get("role"),
+        "role_label": capabilities.get("role_label"),
+        "active_profile": capabilities.get("active_profile"),
+        "capabilities": capabilities,
+        "workflows": {
+            "preview": preview_plan,
+            "fallback": fallback_plan,
+        },
+        "recommended_config": {
+            "workflow_profile": preview_plan.get("effective_profile"),
+            "model_variant": preview_plan.get("selected_model_variant", {}).get("label"),
+            "async_offload": preview_plan.get("optimizations", {}).get("async_offload"),
+            "pinned_memory": preview_plan.get("optimizations", {}).get("pinned_memory"),
+            "weight_streaming": preview_plan.get("optimizations", {}).get("weight_streaming"),
+            "low_workstation_impact": preview_plan.get("low_workstation_impact"),
+        },
+    }
+    verification["artifact_paths"] = _persist_linux_artifact(settings, project_root, "verification", verification)
+    return verification
+
+
+def benchmark_linux_workstation(
+    payload: dict[str, Any] | None = None,
+    settings_path: Path | str | None = None,
+    project_root: Path | str | None = None,
+    manifest_path: Path | str | None = None,
+) -> dict[str, Any]:
+    request_payload = payload or {}
+    project_root_path = Path(project_root) if project_root is not None else PROJECT_ROOT
+    manifest_file = Path(manifest_path) if manifest_path is not None else DEFAULT_MANIFEST_PATH
+    settings_file = Path(settings_path) if settings_path is not None else DEFAULT_SETTINGS_PATH
+    settings = load_settings(settings_path=settings_file, project_root=project_root_path, manifest_path=manifest_file)
+
+    comfy_settings = settings.get("comfyui", {})
+    comfy_host, comfy_port = _effective_comfy_host_port(settings, project_root_path)
+    comfy_base = f"http://{comfy_host}:{comfy_port}"
+    health_url = f"{comfy_base}{comfy_settings.get('health_endpoint', '/system_stats')}"
+    object_info_url = f"{comfy_base}{comfy_settings.get('object_info_endpoint', '/object_info')}"
+    launch_if_needed = bool(request_payload.get("launch_comfyui_if_needed", True))
+    start_timeout = float(request_payload.get("start_timeout_seconds", 45))
+
+    health_probe, _, health_ms = _time_probe(health_url, timeout=2.0, json_payload=False)
+    launched = None
+    if not health_probe.get("ok") and launch_if_needed:
+        try:
+            launched = launch_comfyui_sidecar(settings, project_root_path)
+            health_probe = wait_for_http(health_url, timeout=start_timeout, require_ok=True)
+            health_ms = round(start_timeout * 1000.0, 2)
+        except Exception as exc:
+            launched = {"error": str(exc)}
+
+    object_info_probe, object_info_payload, object_info_ms = _time_probe(object_info_url, timeout=4.0, json_payload=True)
+    comfy_root = resolve_comfy_repo_path(settings, project_root_path)
+    capabilities = detect_linux_workstation_capabilities(settings, project_root_path, comfy_root, object_info_payload=object_info_payload)
+    benchmark = build_linux_benchmark(
+        settings,
+        capabilities,
+        measurements={
+            "health": {"probe": health_probe, "elapsed_ms": health_ms},
+            "object_info": {"probe": object_info_probe, "elapsed_ms": object_info_ms},
+        },
+    )
+    benchmark["settings_path"] = str(settings_file.resolve())
+    benchmark["comfyui"] = {
+        "base_url": comfy_base,
+        "health_url": health_url,
+        "object_info_url": object_info_url,
+        "launch": launched,
+    }
+    benchmark["artifact_paths"] = _persist_linux_artifact(settings, project_root_path, "benchmark", benchmark)
+    return benchmark
 
 
 def _write_pid_metadata(pid_path: Path, payload: dict[str, Any]) -> None:
@@ -706,6 +1296,14 @@ def launch_comfyui_sidecar(settings: dict[str, Any], project_root: Path, emit: P
     pid_path = resolve_path(project_root, comfy_settings.get("pid_path")) or (runtime_paths["runtime_dir"] / "comfyui.pid")
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    linux_settings = settings.get("linux_workstation", {})
+    env.setdefault("COMFYAI_MACHINE_ROLE", str(linux_settings.get("role", "stable_workstation_development_node")))
+    env.setdefault("COMFYAI_MACHINE_PROFILE", str(linux_settings.get("active_profile", "linux_stable_nvidia")))
+    env.setdefault("COMFYAI_LOW_WORKSTATION_IMPACT", "1")
+    env.setdefault("COMFYAI_ASYNC_OFFLOAD", "1")
+    env.setdefault("COMFYAI_PINNED_MEMORY", "1")
+    env.setdefault("COMFYAI_WEIGHT_STREAMING", "auto")
+    env.setdefault("COMFYAI_NVFP4_SUPPORTED", "0")
 
     pid = _spawn_detached(command, comfy_root, env, log_path)
     record_reservation(
@@ -954,6 +1552,112 @@ def stop_planner_sidecar(settings: dict[str, Any], project_root: Path) -> dict[s
     return result
 
 
+def acquire_local_planner_runtime(
+    settings: dict[str, Any],
+    settings_path: Path,
+    project_root: Path,
+    emit: ProgressEmitter,
+    *,
+    allow_download: bool = False,
+) -> dict[str, Any]:
+    emit(make_progress_event("step", step="acquire_local_planner", status="started"))
+    planner_settings = settings.setdefault("planner", {})
+    output_dir = resolve_planner_output_dir(settings, project_root)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model_path, model_path_source, inspection = resolve_local_planner_model_path(settings, project_root)
+    if not inspection["ok"] and allow_download and model_path is not None:
+        python_executable = resolve_python_executable(settings, project_root)
+        model_id = str(planner_settings.get("default_model_id", ""))
+        download_script = (
+            "from huggingface_hub import snapshot_download\n"
+            f"snapshot_download(repo_id={model_id!r}, local_dir={str(model_path)!r}, local_dir_use_symlinks=False)\n"
+        )
+        emit(
+            make_progress_event(
+                "step",
+                step="acquire_local_planner",
+                status="running",
+                action="download_model",
+                model_id=model_id,
+                target_path=str(model_path),
+            )
+        )
+        result = run_command([str(python_executable if python_executable.exists() else Path(sys.executable)), "-c", download_script], cwd=project_root)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Failed to download local planner model")
+        model_path, model_path_source, inspection = resolve_local_planner_model_path(settings, project_root)
+
+    if model_path is not None:
+        planner_settings["model_path"] = str(model_path.resolve()) if inspection["exists"] else str(model_path)
+
+    save_settings(settings, settings_path=settings_path)
+    policy_path = write_local_planner_policy(settings, project_root)
+    status_payload = build_local_planner_status(settings, project_root, object_info_ok=False)
+    status_path = write_local_planner_status(settings, project_root, status_payload)
+    if not inspection["ok"]:
+        emit(
+            make_progress_event(
+                "step",
+                step="acquire_local_planner",
+                status="warning",
+                message="Falcon planner model is not registered locally yet.",
+                model_path=str(model_path) if model_path is not None else None,
+                model_path_source=model_path_source,
+                inspection=inspection,
+                policy_path=str(policy_path.resolve()),
+                status_path=str(status_path.resolve()),
+            )
+        )
+        return settings
+
+    emit(
+        make_progress_event(
+            "step",
+            step="acquire_local_planner",
+            status="completed",
+            model_id=str(planner_settings.get("default_model_id")),
+            model_path=str(model_path.resolve()),
+            model_path_source=model_path_source,
+            planner_output_dir=str(output_dir.resolve()),
+            policy_path=str(policy_path.resolve()),
+            status_path=str(status_path.resolve()),
+        )
+    )
+    return settings
+
+
+def verify_local_planner_runtime(
+    settings: dict[str, Any],
+    settings_path: Path,
+    project_root: Path,
+    *,
+    object_info_payload: Any,
+    comfy_base_url: str | None = None,
+    emit: ProgressEmitter | None = None,
+) -> dict[str, Any]:
+    planner_runtime = LocalPlannerRuntime(settings, project_root)
+    result = planner_runtime.verify(object_info_payload, comfy_base_url=comfy_base_url)
+
+    planner_patch = {
+        "last_verify_at": result["last_verify_at"],
+        "last_verify_ok": bool(result["ok"]),
+        "last_verify_summary": str(result.get("summary", "")),
+    }
+    settings["planner"] = deep_merge(settings.get("planner", {}), planner_patch)
+    save_settings(settings, settings_path=settings_path)
+    write_local_planner_policy(settings, project_root)
+    status_payload = build_local_planner_status(settings, project_root, object_info_ok=bool(object_info_payload))
+    status_payload["verify"] = result
+    write_local_planner_status(settings, project_root, status_payload)
+    if emit is not None:
+        emit(make_progress_event("step", step="verify_local_planner", status="completed", ok=bool(result["ok"])))
+    return {
+        **status_payload,
+        "verify": result,
+    }
+
+
 def run_setup_acquire(
     payload: dict[str, Any] | None = None,
     settings_path: Path | str | None = None,
@@ -971,8 +1675,12 @@ def run_setup_acquire(
         "configure_ports": bool(request_payload.get("configure_ports", True)),
         "acquire_comfyui": bool(request_payload.get("acquire_comfyui", True)),
         "create_venv": bool(request_payload.get("create_venv", True)),
+        "acquire_local_planner": bool(request_payload.get("acquire_local_planner", True)),
         "acquire_optional_models": bool(request_payload.get("acquire_optional_models", False)),
+        "acquire_linux_workstation_assets": bool(request_payload.get("acquire_linux_workstation_assets", os.name != "nt")),
     }
+    acquire_all_linux_checkpoints = bool(request_payload.get("acquire_all_linux_checkpoints", False))
+    download_local_planner_if_missing = bool(request_payload.get("download_local_planner_if_missing", False))
 
     emitter(make_progress_event("start", action="setup_acquire", settings_path=str(settings_file.resolve()), steps=steps))
     settings, saved_settings_path = configure_settings(
@@ -993,10 +1701,31 @@ def run_setup_acquire(
     else:
         emitter(make_progress_event("step", step="create_venv", status="skipped"))
 
+    if steps["acquire_local_planner"]:
+        settings = acquire_local_planner_runtime(
+            settings,
+            settings_file,
+            project_root_path,
+            emitter,
+            allow_download=download_local_planner_if_missing,
+        )
+    else:
+        emitter(make_progress_event("step", step="acquire_local_planner", status="skipped"))
+
     if steps["acquire_optional_models"]:
         acquire_optional_models(settings, project_root_path, emitter)
     else:
         emitter(make_progress_event("step", step="acquire_optional_models", status="skipped"))
+
+    if steps["acquire_linux_workstation_assets"]:
+        acquire_linux_workstation_assets(
+            settings,
+            project_root_path,
+            emitter,
+            acquire_all_checkpoints=acquire_all_linux_checkpoints,
+        )
+    else:
+        emitter(make_progress_event("step", step="acquire_linux_workstation_assets", status="skipped"))
 
     emitter(make_progress_event("complete", action="setup_acquire", ok=True))
     return settings
@@ -1041,30 +1770,14 @@ def verify_setup(
         health_after = wait_for_http(health_url, timeout=start_timeout, require_ok=True)
     else:
         health_after = health_before
-    object_info = _probe_http(object_info_url, timeout=2.0) if health_after["ok"] else {"reachable": False, "ok": False, "status_code": None, "detail": "health_check_failed"}
-    if health_after["ok"] and not object_info["ok"]:
-        object_info = wait_for_http(object_info_url, timeout=min(15.0, start_timeout), require_ok=True)
-
-    planner_probe_timeout = max(5.0, min(start_timeout, 10.0))
-    planner_before = _probe_http(planner_health, timeout=planner_probe_timeout)
-    planner_launch = None
-    assistant_repo_path, assistant_repo_source = resolve_assistant_repo_path(settings, project_root_path)
-    if not planner_before["reachable"] and launch_planner_if_needed and assistant_repo_path is not None and assistant_repo_path.exists():
-        try:
-            planner_launch = launch_planner_sidecar(settings, project_root_path, emit=emitter)
-        except Exception as exc:
-            planner_launch = {"error": str(exc)}
-    if planner_before["reachable"]:
-        planner_after = planner_before
-    elif planner_launch is not None and "error" not in planner_launch:
-        planner_after = wait_for_http(
-            planner_health,
-            timeout=min(20.0, start_timeout),
-            require_ok=False,
-            probe_timeout=planner_probe_timeout,
-        )
+    if health_after["ok"]:
+        object_info, object_info_payload = _probe_json_http(object_info_url, timeout=2.0)
+        if not object_info["ok"]:
+            object_info = wait_for_http(object_info_url, timeout=min(15.0, start_timeout), require_ok=True)
+            object_info, object_info_payload = _probe_json_http(object_info_url, timeout=2.0)
     else:
-        planner_after = planner_before
+        object_info = {"reachable": False, "ok": False, "status_code": None, "detail": "health_check_failed"}
+        object_info_payload = None
 
     comfy_port_status = describe_service_port(
         comfy_host,
@@ -1073,18 +1786,74 @@ def verify_setup(
         probe=health_after,
         timeout=2.0,
     )
-    planner_host, planner_port = split_base_url_host_port(planner_url, default_port=8000)
-    planner_port_status = describe_service_port(
-        planner_host,
-        planner_port,
-        probe_url=planner_health,
-        probe=planner_after,
-        timeout=2.0,
-    )
-
-    planner_optional = bool(planner_settings.get("optional", True))
     required_ok = health_after["ok"] and object_info["ok"]
-    planner_ok = planner_after["reachable"] or planner_optional
+    planner_probe_timeout = max(5.0, min(start_timeout, 10.0))
+    assistant_service = planner_service_status(
+        settings,
+        project_root_path,
+        settings_path=settings_file,
+        timeout=planner_probe_timeout,
+    )
+    planner_enabled = bool(planner_settings.get("enabled", True))
+    assistant_repo_path, assistant_repo_source = resolve_assistant_repo_path(settings, project_root_path)
+    if planner_enabled:
+        try:
+            planner_verification = verify_local_planner_runtime(
+                settings,
+                settings_file,
+                project_root_path,
+                object_info_payload=object_info_payload,
+                comfy_base_url=comfy_base if health_after["ok"] else None,
+                emit=emitter,
+            )
+            planner_error = None
+        except Exception as exc:
+            verify_timestamp = _now_iso()
+            planner_patch = {
+                "last_verify_at": verify_timestamp,
+                "last_verify_ok": False,
+                "last_verify_summary": str(exc),
+            }
+            settings["planner"] = deep_merge(settings.get("planner", {}), planner_patch)
+            save_settings(settings, settings_path=settings_file)
+            planner_verification = build_local_planner_status(
+                settings,
+                project_root_path,
+                object_info_ok=bool(object_info["ok"]),
+            )
+            planner_verification["verify"] = {
+                "ok": False,
+                "last_verify_at": verify_timestamp,
+                "summary": str(exc),
+            }
+            write_local_planner_policy(settings, project_root_path)
+            write_local_planner_status(settings, project_root_path, planner_verification)
+            planner_error = str(exc)
+    else:
+        planner_verification = build_local_planner_status(
+            settings,
+            project_root_path,
+            object_info_ok=bool(object_info["ok"]),
+        )
+        planner_error = None
+    planner_ok = bool(planner_verification.get("ready")) if planner_enabled else True
+    comfy_runtime_paths = resolve_tool_paths(settings, project_root_path)
+    comfy_log_path = resolve_path(project_root_path, comfy_settings.get("log_path")) or (comfy_runtime_paths["runtime_dir"] / "comfyui.log")
+    comfy_log_tail = _read_text_tail(comfy_log_path) if not health_after["ok"] else None
+    comfy_diagnostics = None
+    if comfy_launch is not None and ("error" in comfy_launch or not health_after["ok"]):
+        comfy_diagnostics = {
+            "log_path": str(comfy_log_path.resolve()),
+            "log_tail": comfy_log_tail,
+            "hint": _diagnose_comfyui_log(comfy_log_tail),
+        }
+    linux_verification = _collect_linux_verification(
+        settings,
+        project_root_path,
+        object_info_payload,
+        request_payload,
+        emitter,
+    )
 
     result = {
         "settings_path": str(settings_file.resolve()),
@@ -1098,19 +1867,17 @@ def verify_setup(
             "port_status": comfy_port_status,
             "launched_by_verify": comfy_launch is not None,
             "launch": comfy_launch,
+            "diagnostics": comfy_diagnostics,
         },
         "planner": {
-            "base_url": planner_url,
-            "health_url": planner_health,
-            "optional": planner_optional,
+            **planner_verification,
+            "enabled": planner_enabled,
+            "assistant_service": assistant_service,
             "assistant_repo_path": str(assistant_repo_path.resolve()) if assistant_repo_path is not None else None,
             "assistant_repo_path_source": assistant_repo_source,
-            "probe_before": planner_before,
-            "probe_after": planner_after,
-            "port_status": planner_port_status,
-            "launched_by_verify": planner_launch is not None and "error" not in planner_launch,
-            "launch": planner_launch,
+            "error": planner_error,
         },
+        "linux_workstation": linux_verification,
         "all_required_ok": required_ok and planner_ok,
     }
     emitter(make_progress_event("complete", action="setup_verify", ok=result["all_required_ok"]))

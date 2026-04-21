@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
 
 from prompt_layer.ports import allocate_port, default_app_id, default_port_range, record_reservation, write_local_port_state
 from prompt_layer.setup_config import DEFAULT_MANIFEST_PATH, DEFAULT_SETTINGS_PATH
+from prompt_layer.setup_runtime import benchmark_linux_workstation, verify_setup
+from prompt_layer.setup_status import collect_setup_status
 from prompt_layer.setup_status_server import make_setup_status_handler
 
 
@@ -39,22 +41,29 @@ class LocalSetupServer:
             settings_path=self.settings_path,
         )
         app_id = default_app_id(self.project_root)
-        allocation = allocate_port(
-            app_id=app_id,
-            service_name="setup_flow",
-            preferred_port=self.port,
-            host=self.host,
-            allowed_range=default_port_range(self.port),
-            pid=os.getpid(),
-            notes=str(self.project_root.resolve()),
-        )
-        self.server = ThreadingHTTPServer((self.host, allocation.assigned_port), handler)
+        requested_port = int(self.port)
+        if requested_port > 0:
+            allocation = allocate_port(
+                app_id=app_id,
+                service_name="setup_flow",
+                preferred_port=requested_port,
+                host=self.host,
+                allowed_range=default_port_range(requested_port),
+                pid=os.getpid(),
+                notes=str(self.project_root.resolve()),
+            )
+            bind_port = allocation.assigned_port
+        else:
+            allocation = None
+            bind_port = 0
+
+        self.server = ThreadingHTTPServer((self.host, bind_port), handler)
         record_reservation(
             app_id=app_id,
             service_name="setup_flow",
             protocol="tcp",
             host=self.host,
-            requested_port=self.port,
+            requested_port=requested_port,
             assigned_port=self.server.server_port,
             pid=os.getpid(),
             notes=str(self.project_root.resolve()),
@@ -199,11 +208,17 @@ def _collect_verify_failures(result: dict[str, Any]) -> list[str]:
     health_after = comfy.get("health_after", {})
     object_info = comfy.get("object_info", {})
     planner_after = planner.get("probe_after", {})
+    comfy_launch = comfy.get("launch", {})
+    comfy_diagnostics = comfy.get("diagnostics", {})
 
     if not health_after.get("ok", False):
         failures.append(f"ComfyUI health failed: {health_after.get('detail', 'unknown')}")
     if not object_info.get("ok", False):
         failures.append(f"ComfyUI object_info failed: {object_info.get('detail', 'unknown')}")
+    if isinstance(comfy_launch, dict) and comfy_launch.get("error"):
+        failures.append(f"ComfyUI launch failed: {comfy_launch['error']}")
+    if isinstance(comfy_diagnostics, dict) and comfy_diagnostics.get("hint"):
+        failures.append(f"ComfyUI launch diagnostic: {comfy_diagnostics['hint']}")
     if not planner_after.get("reachable", False) and not planner.get("optional", True):
         failures.append(f"Planner unreachable: {planner_after.get('detail', 'unknown')}")
     launch_error = planner.get("launch", {})
@@ -259,7 +274,7 @@ def _print_verify_summary(result: dict[str, Any]) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Call local ComfyUIhybrid setup endpoints from bootstrap scripts.")
-    parser.add_argument("mode", choices=["bootstrap", "verify"], help="Which setup flow to run.")
+    parser.add_argument("mode", choices=["bootstrap", "verify", "status", "benchmark"], help="Which setup flow to run.")
     parser.add_argument("--host", default="127.0.0.1", help="Local setup server bind host.")
     parser.add_argument("--server-port", type=int, default=0, help="Local setup server bind port. Use 0 for an ephemeral port.")
     parser.add_argument("--project-root", type=Path, default=ROOT, help="Repository root.")
@@ -272,6 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-launch-comfyui", action="store_true", help="Do not launch ComfyUI automatically during verify.")
     parser.add_argument("--no-launch-planner", action="store_true", help="Do not launch the planner sidecar automatically during verify.")
     parser.add_argument("--start-timeout-seconds", type=float, default=45.0, help="Wait time for ComfyUI and planner during verify.")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="Emit JSON instead of human-readable summaries.")
     return parser
 
 
@@ -280,6 +296,49 @@ def main(argv: list[str] | None = None) -> int:
     project_root = args.project_root.resolve()
     manifest_path = args.manifest.resolve()
     settings_path = args.settings.resolve()
+
+    if args.mode == "status":
+        status = collect_setup_status(
+            manifest_path=manifest_path,
+            settings_path=settings_path,
+            project_root=project_root,
+        )
+        if args.json_output:
+            print(json.dumps(status), flush=True)
+        else:
+            _print_status_summary(status, "Status")
+        return 0
+
+    if args.mode == "benchmark":
+        result = benchmark_linux_workstation(
+            payload={
+                "launch_comfyui_if_needed": not args.no_launch_comfyui,
+                "start_timeout_seconds": args.start_timeout_seconds,
+            },
+            settings_path=settings_path,
+            manifest_path=manifest_path,
+            project_root=project_root,
+        )
+        if args.json_output:
+            print(json.dumps(result), flush=True)
+        else:
+            _print_section("Benchmark")
+            print(json.dumps(result, indent=2), flush=True)
+        return 0
+
+    if args.mode == "verify" and args.json_output:
+        result = verify_setup(
+            payload={
+                "start_timeout_seconds": args.start_timeout_seconds,
+                "launch_comfyui_if_needed": not args.no_launch_comfyui,
+                "launch_planner_if_needed": not args.no_launch_planner,
+            },
+            settings_path=settings_path,
+            manifest_path=manifest_path,
+            project_root=project_root,
+        )
+        print(json.dumps(result), flush=True)
+        return 0 if result.get("all_required_ok") else 1
 
     try:
         with LocalSetupServer(
